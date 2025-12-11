@@ -6,10 +6,23 @@ import { CouponCode, Competitor } from "../types";
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 
 if (!apiKey) {
-  console.warn('⚠️ VITE_GEMINI_API_KEY not found. Gemini AI features will not work. Please add it to your .env file.');
+  console.warn('⚠️ VITE_GEMINI_API_KEY not found. Gemini AI features will not work. Please add it to your .env file or Vercel environment variables.');
 }
 
-const ai = new GoogleGenAI({ apiKey });
+// Lazy initialization - only create AI instance when API key exists and when needed
+// This prevents crashing the app on load when API key is missing
+let ai: GoogleGenAI | null = null;
+
+function getAI(): GoogleGenAI {
+  if (!apiKey) {
+    throw new Error('VITE_GEMINI_API_KEY is not configured. Please add it to your environment variables.');
+  }
+  if (!ai) {
+    ai = new GoogleGenAI({ apiKey });
+  }
+  return ai;
+}
+
 
 
 // CHANGED: Upgraded to Gemini 3.0 Pro for Thinking capabilities
@@ -85,12 +98,13 @@ export const planSearch = async (query: string, region: string = 'GLOBAL'): Prom
       `;
 
   try {
+    const geminiAI = getAI(); // Get AI instance (will throw if no API key)
     let response;
     let foundUrls: string[] = [];
 
     // ATTEMPT 1: Try with Google Search Grounding + Thinking
     try {
-      response = await ai.models.generateContent({
+      response = await geminiAI.models.generateContent({
         model: modelName,
         contents: prompt,
         config: {
@@ -111,7 +125,7 @@ export const planSearch = async (query: string, region: string = 'GLOBAL'): Prom
       console.warn("Search Grounding/Thinking failed (falling back to standard):", e.message);
 
       // ATTEMPT 2: Fallback to standard internal knowledge (Flash) if Pro fails
-      response = await ai.models.generateContent({
+      response = await geminiAI.models.generateContent({
         model: "gemini-2.5-flash",
         contents: prompt,
       });
@@ -162,7 +176,8 @@ export const generateLogMessage = async (merchant: string, phase: 'scanning' | '
       ? `Generate a highly technical log line about an autonomous agent searching for ${merchant} coupons. Mention "Virtual Environment" or "Search Index".`
       : `Generate a log line about strictly validating a code on ${merchant} by simulating a checkout. Example: "Simulating cart checkout...", "Injecting code into DOM...", "Verifying expiry headers...".`;
 
-    const response = await ai.models.generateContent({
+    const geminiAI = getAI();
+    const response = await geminiAI.models.generateContent({
       model: "gemini-2.5-flash", // Use flash for small log generation tasks
       contents: prompt,
       config: { maxOutputTokens: 30 }
