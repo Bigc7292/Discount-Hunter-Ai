@@ -1,29 +1,11 @@
-import { GoogleGenAI } from "@google/genai";
 import { CouponCode, Competitor } from "../types";
 
-// Initialize Gemini
 // IMPORTANT: In Vite, environment variables must be prefixed with VITE_ and accessed via import.meta.env
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 
 if (!apiKey) {
   console.warn('⚠️ VITE_GEMINI_API_KEY not found. Gemini AI features will not work. Please add it to your .env file or Vercel environment variables.');
 }
-
-// Lazy initialization - only create AI instance when API key exists and when needed
-// This prevents crashing the app on load when API key is missing
-let ai: GoogleGenAI | null = null;
-
-function getAI(): GoogleGenAI {
-  if (!apiKey) {
-    throw new Error('VITE_GEMINI_API_KEY is not configured. Please add it to your environment variables.');
-  }
-  if (!ai) {
-    ai = new GoogleGenAI({ apiKey });
-  }
-  return ai;
-}
-
-
 
 // CHANGED: Upgraded to Gemini 3.0 Pro for Thinking capabilities
 const modelName = "gemini-3-pro-preview";
@@ -45,11 +27,41 @@ interface SearchResponse {
   groundingUrls?: string[];
 }
 
+// Dynamic import wrapper - only loads Google GenAI library when actually needed
+// This prevents the library from crashing on import when API key is missing
+let aiInstance: any = null;
+
+async function getAI() {
+  if (!apiKey) {
+    throw new Error('VITE_GEMINI_API_KEY is not configured. Please add it to your environment variables.');
+  }
+
+  if (!aiInstance) {
+    // Dynamic import - only loads when this function is called
+    const { GoogleGenAI } = await import("@google/genai");
+    aiInstance = new GoogleGenAI({ apiKey });
+  }
+
+  return aiInstance;
+}
+
 /**
  * uses Gemini 3.0 Pro with Deep Thinking to find and STRICTLY VALIDATE codes.
  * Includes a fallback to standard generation if Search is restricted (403).
  */
 export const planSearch = async (query: string, region: string = 'GLOBAL'): Promise<SearchResponse> => {
+
+  // If no API key, return empty results immediately without trying to load the library
+  if (!apiKey) {
+    console.warn('Cannot search: VITE_GEMINI_API_KEY is not configured');
+    return {
+      merchantName: query,
+      merchantUrl: `https://${query.replace(/\s/g, '').toLowerCase()}.com`,
+      suggestedCodes: [],
+      competitors: [],
+      groundingUrls: []
+    };
+  }
 
   const regionInstruction = region !== 'GLOBAL'
     ? `LOCATION CONSTRAINT: The user is located in ${region}. You MUST prioritize codes valid in ${region} (e.g., .ae for UAE, .co.uk for UK). Ignore codes that are strictly valid only in other regions.`
@@ -98,7 +110,7 @@ export const planSearch = async (query: string, region: string = 'GLOBAL'): Prom
       `;
 
   try {
-    const geminiAI = getAI(); // Get AI instance (will throw if no API key)
+    const geminiAI = await getAI(); // Get AI instance (will throw if no API key)
     let response;
     let foundUrls: string[] = [];
 
@@ -171,12 +183,19 @@ export const planSearch = async (query: string, region: string = 'GLOBAL'): Prom
  * Generates a realistic "Log" entry.
  */
 export const generateLogMessage = async (merchant: string, phase: 'scanning' | 'validating') => {
+  // If no API key, return a fallback message immediately
+  if (!apiKey) {
+    return phase === 'scanning'
+      ? `Scanning ${merchant} database nodes...`
+      : `Validating ${merchant} checkout flow...`;
+  }
+
   try {
     const prompt = phase === 'scanning'
       ? `Generate a highly technical log line about an autonomous agent searching for ${merchant} coupons. Mention "Virtual Environment" or "Search Index".`
       : `Generate a log line about strictly validating a code on ${merchant} by simulating a checkout. Example: "Simulating cart checkout...", "Injecting code into DOM...", "Verifying expiry headers...".`;
 
-    const geminiAI = getAI();
+    const geminiAI = await getAI();
     const response = await geminiAI.models.generateContent({
       model: "gemini-2.5-flash", // Use flash for small log generation tasks
       contents: prompt,
