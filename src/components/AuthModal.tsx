@@ -58,7 +58,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin }) => {
             credits: referrer ? 15 : 0,
             joinedDate: new Date().toISOString(),
             isVerified: false,
-            referredBy: referrer || undefined
+            referredBy: referrer || null
         };
 
         await setDoc(userRef, userProfile);
@@ -375,8 +375,8 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin }) => {
                                 type="submit"
                                 disabled={loading || (!isFirebaseConfigured && mode !== 'admin')}
                                 className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all font-display tracking-wider disabled:opacity-50 ${mode === 'admin'
-                                        ? 'bg-red-600 hover:bg-red-500 text-white'
-                                        : 'bg-hunter-cyan hover:bg-hunter-green text-black'
+                                    ? 'bg-red-600 hover:bg-red-500 text-white'
+                                    : 'bg-hunter-cyan hover:bg-hunter-green text-black'
                                     }`}
                             >
                                 {loading ? 'AUTHENTICATING...' : (
