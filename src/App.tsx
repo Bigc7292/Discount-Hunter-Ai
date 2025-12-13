@@ -9,6 +9,7 @@ import { doc, getDoc } from 'firebase/firestore';
 
 import { SearchStatus, SearchResult, LogEntry, User, CouponCode, InboxItem, HistoryEntry } from './types';
 import * as GeminiService from './services/geminiService';
+import { subscribeToRecentSavings, formatSavingForTicker, RecentSaving } from './services/recentSavingsService';
 import TerminalLog from './components/TerminalLog';
 import ResultCard from './components/ResultCard';
 import AuthModal from './components/AuthModal';
@@ -98,8 +99,35 @@ const regionData: Record<string, Continent> = {
     "ASIA": { name: "ASIA", countries: [{ name: "Japan", code: "JP", flag: "🇯🇵" }, { name: "China", code: "CN", flag: "🇨🇳" }] },
 };
 
-const liveSavings = ["🇺🇸 TARGET: NIKE -> SAVED $12.50", "🇬🇧 TARGET: ASOS -> SAVED £8.00", "🇩🇪 TARGET: ADIDAS -> SAVED €15.20", "🇯🇵 TARGET: RAKUTEN -> SAVED ¥1200",];
-const LiveTicker = () => (<div className="bg-black/50 backdrop-blur border-b border-hunter-border py-1 overflow-hidden flex items-center z-50 relative"> <div className="flex animate-marquee whitespace-nowrap"> {[...liveSavings, ...liveSavings, ...liveSavings].map((text, i) => (<div key={i} className="mx-6 flex items-center gap-2 text-[10px] text-hunter-cyan font-mono tracking-widest opacity-70"> <span className="w-1.5 h-1.5 rounded-full bg-hunter-green animate-pulse"></span> {text} </div>))} </div> </div>);
+// Dynamic LiveTicker component that reads from Firestore
+const LiveTicker = () => {
+    const [savings, setSavings] = useState<RecentSaving[]>([]);
+
+    useEffect(() => {
+        const unsubscribe = subscribeToRecentSavings((data) => {
+            setSavings(data);
+        }, 10);
+        return () => unsubscribe();
+    }, []);
+
+    // Generate display text from savings data
+    const displayTexts = savings.length > 0
+        ? savings.map(formatSavingForTicker)
+        : ['🔄 SYSTEM ONLINE: AWAITING LIVE DATA...'];
+
+    return (
+        <div className="bg-black/50 backdrop-blur border-b border-hunter-border py-1 overflow-hidden flex items-center z-50 relative">
+            <div className="flex animate-marquee whitespace-nowrap">
+                {[...displayTexts, ...displayTexts, ...displayTexts].map((text, i) => (
+                    <div key={i} className="mx-6 flex items-center gap-2 text-[10px] text-hunter-cyan font-mono tracking-widest opacity-70">
+                        <span className="w-1.5 h-1.5 rounded-full bg-hunter-green animate-pulse"></span>
+                        {text}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
 
 const DealAlert = ({ merchant }: { merchant: string }) => {
     const [subscribed, setSubscribed] = useState(false);
@@ -189,7 +217,7 @@ export default function App() {
                 if (isSuccess) { addLog(`TARGET CONFIRMED: ${suggestion.code} [SAVINGS VERIFIED]`, 'success'); validatedCodes.push({ code: suggestion.code, description: suggestion.description, successRate: 100, lastVerified: 'Just now', source: suggestion.source || 'Verified Source', isVerified: true }); } else { addLog(`TARGET FAILED: ${suggestion.code} [INVALID]`, 'error'); }
             }
             setStatus(SearchStatus.COMPLETE);
-            setResult({ merchantName: plan.merchantName, merchantUrl: plan.merchantUrl, codes: validatedCodes, competitors: plan.competitors, groundingUrls: plan.groundingUrls, stats: { sourcesScanned: (plan.groundingUrls?.length || 0) + 12, codesTested: totalCodes, timeTaken: `${((Date.now() - startTime) / 1000).toFixed(1)}s`, moneySavedEstimate: validatedCodes.length > 0 ? '$24.50' : '$0.00' } });
+            setResult({ merchantName: plan.merchantName, merchantUrl: plan.merchantUrl, codes: validatedCodes, competitors: plan.competitors, groundingUrls: plan.groundingUrls, stats: { sourcesScanned: (plan.groundingUrls?.length || 0) + 12, codesTested: totalCodes, timeTaken: `${((Date.now() - startTime) / 1000).toFixed(1)}s`, moneySavedEstimate: (plan as any).estimatedTotalSavings || (validatedCodes.length > 0 ? 'Calculating...' : '$0.00') } });
             if (user) { setSearchHistory(prev => [{ id: Math.random().toString(36).substring(7), merchant: plan.merchantName, query: activeQuery, resultCount: validatedCodes.length, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }, ...prev]); }
         } catch (error) { console.error(error); addLog('FATAL ERROR IN PIPELINE.', 'error'); setStatus(SearchStatus.ERROR); }
     };

@@ -98,8 +98,9 @@ export const planSearch = async (query: string, region: string = 'GLOBAL'): Prom
       {
         "merchantName": "Store Name",
         "merchantUrl": "https://store.com",
+        "estimatedTotalSavings": "$25.00",
         "suggestedCodes": [
-           { "code": "CODE1", "description": "10% off", "source": "Reddit/Verified", "likelySuccessRate": 95 },
+           { "code": "CODE1", "description": "10% off", "source": "Reddit/Verified", "likelySuccessRate": 95, "estimatedSavings": "$15.00" },
            ...
         ],
         "competitors": [
@@ -107,7 +108,13 @@ export const planSearch = async (query: string, region: string = 'GLOBAL'): Prom
            ...
         ]
       }
+      
+      IMPORTANT: For estimatedSavings, calculate a realistic dollar/currency amount based on typical order values for that merchant. For example:
+      - "10% off" at Nike with avg order $150 = "$15.00"
+      - "$20 off $100+" = "$20.00"
+      - "Free shipping" = "$8.00" (typical shipping cost)
       `;
+
 
   try {
     const geminiAI = await getAI(); // Get AI instance (will throw if no API key)
