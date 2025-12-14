@@ -92,6 +92,9 @@ export const planSearch = async (query: string, region: string = 'GLOBAL'): Prom
       - If a code is found on a spammy coupon site but not verified by a human on a forum/social media in the last 24 hours: REJECT IT.
       - If the code looks like a placeholder (e.g., "DEAL50" with no success reports): REJECT IT.
       - It is better to return ZERO codes than ONE fake code.
+      - **ZERO TOLERANCE POLICY:** The user is launching this app publicly. If you provide a non-working code, the user's reputation is destroyed. 
+      - **ONLY return codes you are 99% confident would work RIGHT NOW.**
+      - If you find NO working codes, return an empty list. Do NOT hallucinate or guess.
       
       OUTPUT FORMAT:
       Return a STRICT JSON string (no markdown formatting, no backticks) with this structure:
