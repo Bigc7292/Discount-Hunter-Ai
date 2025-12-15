@@ -156,7 +156,7 @@ const WarningToast = ({ show, onClose, onSelect }: { show: boolean, onClose: () 
                             </div>
                             <button onClick={onClose} className="ml-auto text-yellow-500/50 hover:text-white"><Zap size={16} className="rotate-45" /></button>
                         </div>
-                        <button 
+                        <button
                             onClick={onSelect}
                             className="w-full bg-yellow-500 hover:bg-yellow-400 text-black font-bold font-display text-xs py-2 rounded uppercase tracking-wider transition-colors shadow-lg"
                         >
@@ -241,7 +241,7 @@ export default function App() {
         const activeQuery = overrideQuery || query;
         if (!activeQuery.trim()) return;
         if (overrideQuery) setQuery(overrideQuery);
-        
+
         // Strict Region Requirement
         if (!regionSelected) {
             setShowRegionWarning(true);
@@ -328,6 +328,8 @@ export default function App() {
             }
         } catch (error) { console.error(error); addLog('FATAL ERROR IN PIPELINE.', 'error'); setStatus(SearchStatus.ERROR); }
     };
+
+    const handleCountrySelect = (country: Country) => {
         setSearchRegionCode(country.code);
         setSearchRegionFlag(country.flag);
         setIsRegionMenuOpen(false);
@@ -361,22 +363,25 @@ export default function App() {
                     <div className="flex items-center gap-2 md:gap-4">
                         {/* REGION SELECTOR (Moved to Header) */}
                         <div className="relative" ref={regionMenuRef}>
-                            <button 
-                                onClick={() => setIsRegionMenuOpen(!isRegionMenuOpen)} 
+                            <button
+                                onClick={() => {
+                                    setIsRegionMenuOpen(!isRegionMenuOpen);
+                                    setShowRegionWarning(false);
+                                }}
                                 className={`flex items-center justify-center w-8 h-8 md:w-auto md:h-auto md:px-3 md:py-1.5 rounded transition-all duration-300 ${!regionSelected ? 'bg-yellow-500/20 text-yellow-500 border border-yellow-500 animate-pulse shadow-[0_0_15px_rgba(234,179,8,0.4)]' : 'bg-hunter-surface border border-hunter-border hover:border-hunter-cyan text-hunter-muted hover:text-white'}`}
                             >
                                 <span className="text-lg leading-none">{searchRegionFlag}</span>
                                 <span className="hidden md:block font-mono text-xs font-bold ml-2">{searchRegionCode}</span>
                                 <ChevronDown size={12} className="hidden md:block ml-1" />
                             </button>
-                            
+
                             {/* DROPDOWN MENU - Robust Mobile Positioning */}
                             <AnimatePresence>
                                 {isRegionMenuOpen && (
                                     <>
                                         {/* Mobile Backdrop */}
                                         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[9998] md:hidden" onClick={() => setIsRegionMenuOpen(false)} />
-                                        
+
                                         <motion.div
                                             initial={{ opacity: 0, y: 10, scale: 0.95 }}
                                             animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -408,7 +413,7 @@ export default function App() {
                                                             <div className="grid grid-cols-1 gap-1 px-1">
                                                                 {continentCountries.map(c => (
                                                                     <button key={c.code} onClick={() => handleCountrySelect(c)} className="w-full text-left px-3 py-2 text-sm hover:bg-hunter-cyan/10 hover:text-hunter-cyan rounded-md flex items-center gap-3 transition-colors group">
-                                                                        <span className="text-xl filter drop-shadow opacity-80 group-hover:opacity-100 transition-opacity">{c.flag}</span> 
+                                                                        <span className="text-xl filter drop-shadow opacity-80 group-hover:opacity-100 transition-opacity">{c.flag}</span>
                                                                         <span className="font-mono text-xs md:text-sm">{c.name}</span>
                                                                         {searchRegionCode === c.code && <Check size={14} className="ml-auto text-hunter-cyan" />}
                                                                     </button>
@@ -418,7 +423,7 @@ export default function App() {
                                                     );
                                                 })}
                                             </div>
-                                            
+
                                             {/* Quick Footer */}
                                             <div className="p-2 border-t border-hunter-border/30 bg-black/40 text-[10px] text-hunter-muted text-center font-mono">
                                                 Select target for localized AI scan
