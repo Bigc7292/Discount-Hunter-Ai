@@ -136,6 +136,39 @@ const DealAlert = ({ merchant }: { merchant: string }) => {
     return subscribed ? (<div className="mt-8 bg-hunter-green/10 border border-hunter-green/30 rounded-lg p-4 text-center animate-in fade-in"> <Check className="mx-auto text-hunter-green mb-2" size={24} /> <div className="text-hunter-green font-display font-bold text-sm tracking-wide">ALERTS ACTIVATED</div> </div>) : (<div className="mt-8 bg-hunter-surface border border-hunter-border rounded-lg p-6 relative overflow-hidden group"> <div className="flex items-start gap-4 relative z-10"> <div className="bg-hunter-cyan/10 p-3 rounded-full border border-hunter-cyan/20"><Bell className="text-hunter-cyan" size={20} /></div> <div className="flex-1"> <h4 className="text-white font-display font-bold text-sm mb-1 uppercase tracking-wide">Monitor {merchant} Signals</h4> <p className="text-xs text-hunter-muted mb-4 font-mono">Our bots scan {merchant} every 15 minutes.</p> <form onSubmit={(e) => { e.preventDefault(); setSubscribed(true); }} className="flex gap-2"> <input type="email" required placeholder="OPERATIVE EMAIL..." className="flex-1 bg-black/50 border border-hunter-border rounded px-3 py-2 text-xs text-white focus:border-hunter-cyan focus:outline-none placeholder:text-hunter-muted/50 font-mono" /> <button type="submit" className="bg-hunter-cyan text-black font-bold font-display text-xs px-4 rounded hover:bg-white transition-colors">TRACK</button> </form> </div> </div> </div>);
 };
 
+// NEW: Warning Toast for Region Selection
+const WarningToast = ({ show, onClose, onSelect }: { show: boolean, onClose: () => void, onSelect: () => void }) => {
+    return (
+        <AnimatePresence>
+            {show && (
+                <motion.div
+                    initial={{ opacity: 0, y: -50 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -50 }}
+                    className="fixed top-24 left-1/2 -translate-x-1/2 z-[100000] w-[90%] max-w-md"
+                >
+                    <div className="bg-yellow-950/90 backdrop-blur-md border border-yellow-500 text-yellow-500 px-6 py-4 rounded-lg shadow-[0_0_30px_rgba(234,179,8,0.3)] flex flex-col gap-3">
+                        <div className="flex items-start gap-3">
+                            <ShieldAlert className="shrink-0 animate-pulse" size={24} />
+                            <div>
+                                <h4 className="font-bold font-display tracking-widest text-sm uppercase">Access Denied</h4>
+                                <p className="text-xs font-mono text-yellow-200/80 mt-1">Target region required for accurate deal scanning.</p>
+                            </div>
+                            <button onClick={onClose} className="ml-auto text-yellow-500/50 hover:text-white"><Zap size={16} className="rotate-45" /></button>
+                        </div>
+                        <button 
+                            onClick={onSelect}
+                            className="w-full bg-yellow-500 hover:bg-yellow-400 text-black font-bold font-display text-xs py-2 rounded uppercase tracking-wider transition-colors shadow-lg"
+                        >
+                            Select Region Now
+                        </button>
+                    </div>
+                </motion.div>
+            )}
+        </AnimatePresence>
+    );
+};
+
 export default function App() {
     const [query, setQuery] = useState('');
     const [searchRegionCode, setSearchRegionCode] = useState('GLOBAL');
@@ -159,6 +192,7 @@ export default function App() {
     const [lang, setLang] = useState<LangCode>('en');
     const [isLangMenuOpen, setIsLangMenuOpen] = useState(false);
     const [isRegionMenuOpen, setIsRegionMenuOpen] = useState(false);
+    const [showRegionWarning, setShowRegionWarning] = useState(false);
     const [darkMode, setDarkMode] = useState<boolean>(true);
     const t = translations[lang] || translations['en'];
     const langMenuRef = useRef<HTMLDivElement>(null);
@@ -207,6 +241,14 @@ export default function App() {
         const activeQuery = overrideQuery || query;
         if (!activeQuery.trim()) return;
         if (overrideQuery) setQuery(overrideQuery);
+        
+        // Strict Region Requirement
+        if (!regionSelected) {
+            setShowRegionWarning(true);
+            setIsRegionMenuOpen(true);
+            return;
+        }
+
         if (!user && dailySearchesUsed >= 2) { setIsAuthOpen(true); return; }
         if (user && user.dailySearchesUsed >= user.dailySearchLimit) { setIsPricingOpen(true); return; }
         setStatus(SearchStatus.PLANNING); setLogs([]); setResult(null); setInfluencerCodes([]); setGlitchStatus(null); setIsLogExpanded(false); setDailySearchesUsed(prev => prev + 1);
@@ -286,11 +328,11 @@ export default function App() {
             }
         } catch (error) { console.error(error); addLog('FATAL ERROR IN PIPELINE.', 'error'); setStatus(SearchStatus.ERROR); }
     };
-    const handleCountrySelect = (country: Country) => {
         setSearchRegionCode(country.code);
         setSearchRegionFlag(country.flag);
         setIsRegionMenuOpen(false);
         setRegionSelected(true);
+        setShowRegionWarning(false);
     };
 
     // Navigate back to main page
@@ -308,6 +350,7 @@ export default function App() {
         <div className="min-h-screen text-hunter-text font-sans selection:bg-hunter-cyan selection:text-black flex flex-col overflow-x-hidden relative">
             <BackgroundCanvas /> {/* <--- Canvas is now the animated background! */}
             <CyberCursor />
+            <WarningToast show={showRegionWarning} onClose={() => setShowRegionWarning(false)} onSelect={() => { setShowRegionWarning(false); setIsRegionMenuOpen(true); }} />
 
             {/* Navbar - Sticky and relative to sit on top of canvas */}
             <nav className="border-b border-hunter-border bg-black/50 backdrop-blur-md sticky top-0 z-30 relative">
@@ -318,51 +361,70 @@ export default function App() {
                     <div className="flex items-center gap-2 md:gap-4">
                         {/* REGION SELECTOR (Moved to Header) */}
                         <div className="relative" ref={regionMenuRef}>
-                            <button onClick={() => setIsRegionMenuOpen(!isRegionMenuOpen)} className={`flex items-center gap-1 md:gap-1.5 px-2 md:px-3 py-1.5 rounded bg-hunter-surface border hover:border-hunter-cyan transition-colors font-mono text-xs ${!regionSelected ? 'border-yellow-500 animate-pulse text-yellow-500' : 'border-hunter-border text-hunter-muted hover:text-white'}`}>
-                                <span className="text-base">{searchRegionFlag}</span>
-                                <span className="hidden md:block font-bold">{searchRegionCode}</span>
-                                <ChevronDown size={12} />
+                            <button 
+                                onClick={() => setIsRegionMenuOpen(!isRegionMenuOpen)} 
+                                className={`flex items-center justify-center w-8 h-8 md:w-auto md:h-auto md:px-3 md:py-1.5 rounded transition-all duration-300 ${!regionSelected ? 'bg-yellow-500/20 text-yellow-500 border border-yellow-500 animate-pulse shadow-[0_0_15px_rgba(234,179,8,0.4)]' : 'bg-hunter-surface border border-hunter-border hover:border-hunter-cyan text-hunter-muted hover:text-white'}`}
+                            >
+                                <span className="text-lg leading-none">{searchRegionFlag}</span>
+                                <span className="hidden md:block font-mono text-xs font-bold ml-2">{searchRegionCode}</span>
+                                <ChevronDown size={12} className="hidden md:block ml-1" />
                             </button>
-                            {/* DROPDOWN MENU */}
+                            
+                            {/* DROPDOWN MENU - Robust Mobile Positioning */}
                             <AnimatePresence>
                                 {isRegionMenuOpen && (
-                                    <motion.div
-                                        initial={{ opacity: 0, y: 10 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: 10 }}
-                                        className="absolute top-full right-0 mt-2 w-64 max-h-80 bg-[#0a0a0a] border border-hunter-border rounded-lg shadow-2xl overflow-hidden flex flex-col z-[9999]"
-                                    >
-                                        {/* Search Header */}
-                                        <div className="p-2 border-b border-hunter-border/50 bg-hunter-surface/50">
-                                            <input
-                                                type="text"
-                                                placeholder="Search country..."
-                                                className="w-full bg-black/50 border border-hunter-border rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-hunter-cyan font-mono"
-                                                autoFocus
-                                                onClick={(e) => e.stopPropagation()}
-                                            />
-                                        </div>
+                                    <>
+                                        {/* Mobile Backdrop */}
+                                        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[9998] md:hidden" onClick={() => setIsRegionMenuOpen(false)} />
+                                        
+                                        <motion.div
+                                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                                            className="fixed md:absolute top-20 left-4 right-4 md:top-full md:right-0 md:left-auto mt-2 w-auto md:w-72 max-h-[70vh] md:max-h-96 bg-[#0a0a0a] border border-hunter-border rounded-xl shadow-2xl overflow-hidden flex flex-col z-[9999]"
+                                        >
+                                            {/* Search Header */}
+                                            <div className="p-3 border-b border-hunter-border/50 bg-hunter-surface/50 flex items-center gap-2">
+                                                <Search size={14} className="text-hunter-muted" />
+                                                <input
+                                                    type="text"
+                                                    placeholder="Search country..."
+                                                    className="w-full bg-transparent text-sm text-white focus:outline-none placeholder:text-hunter-muted/50 font-mono"
+                                                    autoFocus
+                                                    onClick={(e) => e.stopPropagation()}
+                                                />
+                                            </div>
 
-                                        {/* Scrollable List */}
-                                        <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
-                                            {['NORTH_AMERICA', 'EUROPE', 'ASIA', 'OCEANIA', 'SOUTH_AMERICA', 'AFRICA', 'GLOBAL'].map(continent => {
-                                                const continentCountries = ALL_COUNTRIES.filter(c => c.continent === continent);
-                                                if (continentCountries.length === 0) return null;
-                                                return (
-                                                    <div key={continent}>
-                                                        <div className="px-2 py-1 text-[10px] text-hunter-muted font-bold uppercase tracking-wider bg-black/20 mb-1 sticky top-0 mt-2">
-                                                            {continent.replace('_', ' ')}
+                                            {/* Scrollable List */}
+                                            <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
+                                                {['NORTH_AMERICA', 'EUROPE', 'ASIA', 'OCEANIA', 'SOUTH_AMERICA', 'AFRICA', 'GLOBAL'].map(continent => {
+                                                    const continentCountries = ALL_COUNTRIES.filter(c => c.continent === continent);
+                                                    if (continentCountries.length === 0) return null;
+                                                    return (
+                                                        <div key={continent}>
+                                                            <div className="px-3 py-2 text-[10px] text-hunter-cyan/70 font-bold uppercase tracking-widest bg-black/40 mb-1 sticky top-0 backdrop-blur-sm">
+                                                                {continent.replace('_', ' ')}
+                                                            </div>
+                                                            <div className="grid grid-cols-1 gap-1 px-1">
+                                                                {continentCountries.map(c => (
+                                                                    <button key={c.code} onClick={() => handleCountrySelect(c)} className="w-full text-left px-3 py-2 text-sm hover:bg-hunter-cyan/10 hover:text-hunter-cyan rounded-md flex items-center gap-3 transition-colors group">
+                                                                        <span className="text-xl filter drop-shadow opacity-80 group-hover:opacity-100 transition-opacity">{c.flag}</span> 
+                                                                        <span className="font-mono text-xs md:text-sm">{c.name}</span>
+                                                                        {searchRegionCode === c.code && <Check size={14} className="ml-auto text-hunter-cyan" />}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
                                                         </div>
-                                                        {continentCountries.map(c => (
-                                                            <button key={c.code} onClick={() => handleCountrySelect(c)} className="w-full text-left px-3 py-2 text-xs hover:bg-hunter-cyan/10 hover:text-hunter-cyan rounded flex items-center gap-3 transition-colors">
-                                                                <span className="text-lg">{c.flag}</span> {c.name}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </motion.div>
+                                                    );
+                                                })}
+                                            </div>
+                                            
+                                            {/* Quick Footer */}
+                                            <div className="p-2 border-t border-hunter-border/30 bg-black/40 text-[10px] text-hunter-muted text-center font-mono">
+                                                Select target for localized AI scan
+                                            </div>
+                                        </motion.div>
+                                    </>
                                 )}
                             </AnimatePresence>
                         </div>
@@ -489,8 +551,8 @@ export default function App() {
                                         onChange={(e) => setQuery(e.target.value)}
                                         onFocus={() => {
                                             if (!regionSelected) {
-                                                addLog("⚠️ SYSTEM ALERT: SELECT TARGET REGION IN HEADER", 'warning');
-                                                setIsRegionMenuOpen(true); // Auto-open the menu
+                                                setShowRegionWarning(true);
+                                                // setIsRegionMenuOpen(true); // Let use specific button in toast
                                             }
                                         }}
                                         placeholder={!regionSelected ? "⚠️ SELECT REGION FIRST..." : t.searchPlaceholder}
