@@ -86,3 +86,14 @@ export interface PricingTier {
   features: string[];
   isPopular?: boolean;
 }
+
+export interface Country {
+  name: string;
+  code: string;
+  flag: string;
+}
+
+export interface Continent {
+  name: string;
+  countries: Country[];
+}

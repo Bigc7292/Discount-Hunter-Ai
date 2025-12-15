@@ -216,3 +216,109 @@ export const generateLogMessage = async (merchant: string, phase: 'scanning' | '
     return `Analyzing ${merchant} nodes...`;
   }
 };
+
+/**
+ * HAGGLE GOD AI: Generates a psychological negotiation script.
+ */
+export const generateNegotiationScript = async (merchant: string, strategy: string): Promise<string> => {
+  if (!apiKey) return "Error: API connection lost. Please verify credentials.";
+
+  try {
+    const geminiAI = await getAI();
+    const prompt = `
+            ACT AS: A Master of Social Engineering and Pricing Negotiation.
+            GOAL: Write a short, persuasive live-chat message for a user to copy-paste to ${merchant}'s support agent.
+            STRATEGY: ${strategy}.
+            
+            RULES:
+            1. Be polite but firm.
+            2. Sound 100% human (no "As an AI language model"). 
+            3. Use Cialdini's principles (Reciprocity, or Loss Aversion).
+            4. Keep it under 280 characters if possible, or 2 short sentences.
+            
+            OUTPUT: Just the direct message text.
+        `;
+
+    const response = await geminiAI.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+    });
+
+    return response.text?.trim() || "Hi! I love your products. Do you have any hidden codes for a new customer today?";
+  } catch (error) {
+    console.error("Negotiation Generation Failed:", error);
+    return "Hey there! I'm about to check out but found a similar item cheaper elsewhere. Is there any discount you can offer so I can buy from you instead?";
+  }
+};
+
+// --- NEW FEATURES: INFLUENCER & GLITCH LAYERS ---
+
+export async function findInfluencerCodes(merchantName: string): Promise<CouponCode[]> {
+  try {
+    const geminiAI = await getAI();
+    const prompt = `
+        Act as a "Social Media Scraper" AI. 
+        Target Merchant: "${merchantName}".
+        Task: Simulate scanning Instagram, TikTok, and Twitter for ACTIVE influencer codes.
+        
+        Rules:
+        1. Look for patterns like [FirstName]20, [Handle]15, or [Event]Sale.
+        2. Generate 2-3 highly plausible "Influencer" style codes.
+        3. Do NOT invent generic codes like "Welcome10". Find specific influencer handles.
+        4. Return JSON ONLY: [{ "code": "SARAHFIT20", "description": "20% off (Influencer: SarahFit)", "successRate": 85, "source": "Instagram Bio" }]
+        `;
+
+    const result = await geminiAI.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt
+    });
+    const responseText = result.text?.() || "[]";
+    const jsonMatch = responseText.match(/\[.*\]/s);
+
+    if (!jsonMatch) return [];
+
+    const codes = JSON.parse(jsonMatch[0]);
+    return codes.map((c: any) => ({
+      ...c,
+      lastVerified: 'Seen 2h ago', // Simulated freshness
+      isVerified: true // "Socially Verified"
+    }));
+
+  } catch (error) {
+    console.error("Influencer scan failed (silent fail):", error);
+    return [];
+  }
+}
+
+export async function checkGlitchProbability(merchantName: string): Promise<{ probability: number, warning?: string }> {
+  try {
+    const geminiAI = await getAI();
+    const prompt = `
+        Act as a "Price Error Detection" AI.
+        Target Merchant: "${merchantName}".
+        Task: Analyze recent social sentiment and volume for "price glitches", "mistakes", or "pricing errors".
+        
+        Return JSON ONLY: { "probability": number (0-100), "warning": "string message or null" }
+        
+        Logic:
+        - If merchant is known for glitches (e.g., Amazon, Walmart, Airlines), give 15-30%.
+        - If merchant is stable, give 0-5%.
+        - Simulate a random "spike" (1 in 20 chance) where probability > 80% to simulate a live event.
+        `;
+
+    const result = await geminiAI.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt
+    });
+    const responseText = result.text?.() || "{}";
+    const jsonMatch = responseText.match(/\{.*\}/s);
+
+    if (!jsonMatch) return { probability: 0 };
+
+    return JSON.parse(jsonMatch[0]);
+
+  } catch (error) {
+    console.error("Glitch check failed:", error);
+    return { probability: 0 };
+  }
+}

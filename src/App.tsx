@@ -16,8 +16,9 @@ import AuthModal from './components/AuthModal';
 import PricingModal from './components/PricingModal';
 import Dashboard from './components/Dashboard';
 import BackgroundCanvas from './components/BackgroundCanvas';
-import RegionSelectorModal from './components/RegionSelectorModal'; // <--- NEW IMPORT
+import RegionSelectorModal from './components/RegionSelectorModal';
 import { Continent, Country } from './types';
+import { ALL_COUNTRIES } from './data/countries';
 // --- CYBER CURSOR COMPONENT ---
 const CyberCursor = () => {
     const cursorX = useMotionValue(-100);
@@ -50,7 +51,7 @@ const CyberCursor = () => {
 
     return (
         <motion.div
-            className="fixed top-0 left-0 w-12 h-12 pointer-events-none z-[9999] flex items-center justify-center pointer-events-none"
+            className="fixed top-0 left-0 w-12 h-12 pointer-events-none z-[100000] flex items-center justify-center pointer-events-none"
             style={{ translateX: cursorXSpring, translateY: cursorYSpring, marginLeft: -24, marginTop: -24 }}
         >
             <motion.div
@@ -98,12 +99,7 @@ const translations: Record<LangCode, any> = {
 const categories = [{ id: 'tech', label: 'TECH', icon: Laptop }, { id: 'fashion', label: 'FASHION', icon: Shirt }, { id: 'travel', label: 'TRAVEL', icon: Plane }, { id: 'food', label: 'FOOD', icon: Pizza }, { id: 'services', label: 'SERVICES', icon: Briefcase },];
 
 
-const regionData: Record<string, Continent> = {
-    "GLOBAL": { name: "GLOBAL", countries: [{ name: "Global / Any", code: "GLOBAL", flag: "🌍" }] },
-    "NORTH_AMERICA": { name: "NORTH AMERICA", countries: [{ name: "USA", code: "US", flag: "🇺🇸" }, { name: "Canada", code: "CA", flag: "🇨🇦" }] },
-    "EUROPE": { name: "EUROPE", countries: [{ name: "UK", code: "GB", flag: "🇬🇧" }, { name: "Germany", code: "DE", flag: "🇩🇪" }] },
-    "ASIA": { name: "ASIA", countries: [{ name: "Japan", code: "JP", flag: "🇯🇵" }, { name: "China", code: "CN", flag: "🇨🇳" }] },
-};
+// Region data is now handled in src/data/countries.ts
 
 // Dynamic LiveTicker component that reads from Firestore
 const LiveTicker = () => {
@@ -144,6 +140,10 @@ export default function App() {
     const [query, setQuery] = useState('');
     const [searchRegionCode, setSearchRegionCode] = useState('GLOBAL');
     const [searchRegionFlag, setSearchRegionFlag] = useState('🌍');
+    const [regionSelected, setRegionSelected] = useState(false);
+    // NEW STATE: Influencer & Glitch Layers
+    const [influencerCodes, setInfluencerCodes] = useState<CouponCode[]>([]);
+    const [glitchStatus, setGlitchStatus] = useState<{ probability: number, warning?: string } | null>(null);
 
     const [status, setStatus] = useState<SearchStatus>(SearchStatus.IDLE);
     const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -209,7 +209,7 @@ export default function App() {
         if (overrideQuery) setQuery(overrideQuery);
         if (!user && dailySearchesUsed >= 2) { setIsAuthOpen(true); return; }
         if (user && user.dailySearchesUsed >= user.dailySearchLimit) { setIsPricingOpen(true); return; }
-        setStatus(SearchStatus.PLANNING); setLogs([]); setResult(null); setIsLogExpanded(false); setDailySearchesUsed(prev => prev + 1);
+        setStatus(SearchStatus.PLANNING); setLogs([]); setResult(null); setInfluencerCodes([]); setGlitchStatus(null); setIsLogExpanded(false); setDailySearchesUsed(prev => prev + 1);
         if (user) { setUser({ ...user, dailySearchesUsed: user.dailySearchesUsed + 1 }); }
         addLog(`INITIALIZING HUNTER PROTOCOL: "${activeQuery}" REGION: ${searchRegionCode}`, 'system');
         try {
@@ -245,6 +245,22 @@ export default function App() {
             setStatus(SearchStatus.COMPLETE);
             setResult({ merchantName: plan.merchantName, merchantUrl: plan.merchantUrl, codes: validatedCodes, competitors: plan.competitors, groundingUrls: plan.groundingUrls, stats: { sourcesScanned: (plan.groundingUrls?.length || 0) + 12, codesTested: totalCodes, timeTaken: `${((Date.now() - startTime) / 1000).toFixed(1)}s`, moneySavedEstimate: (plan as any).estimatedTotalSavings || (validatedCodes.length > 0 ? 'Calculating...' : '$0.00') } });
 
+            // --- INFLUENCER & GLITCH LAYERS (ADDITIVE) ---
+            addLog('INITIATING SOCIAL DEEP-NET SCAN...', 'info');
+            GeminiService.findInfluencerCodes(plan.merchantName).then(codes => {
+                if (codes.length > 0) {
+                    setInfluencerCodes(codes);
+                    addLog(`SOCIAL SIGNAL: FOUND ${codes.length} INFLUENCER CODES`, 'success');
+                }
+            });
+
+            GeminiService.checkGlitchProbability(plan.merchantName).then(status => {
+                setGlitchStatus(status);
+                if (status.probability > 50) {
+                    addLog(`GLITCH WATCH ALERT: ${status.probability}% PROBABILITY`, 'warning');
+                }
+            });
+
             // Auto-save verified codes to User Inbox
             if (user && validatedCodes.length > 0) {
                 // Add to history first (UI update)
@@ -270,7 +286,12 @@ export default function App() {
             }
         } catch (error) { console.error(error); addLog('FATAL ERROR IN PIPELINE.', 'error'); setStatus(SearchStatus.ERROR); }
     };
-    const handleCountrySelect = (country: Country) => { setSearchRegionCode(country.code); setSearchRegionFlag(country.flag); setIsRegionMenuOpen(false); };
+    const handleCountrySelect = (country: Country) => {
+        setSearchRegionCode(country.code);
+        setSearchRegionFlag(country.flag);
+        setIsRegionMenuOpen(false);
+        setRegionSelected(true);
+    };
 
     // Navigate back to main page
     const handleGoHome = () => {
@@ -295,6 +316,57 @@ export default function App() {
                         <img src="/logo.jpg" alt="Discount Hunter AI" className="h-10 md:h-16 w-auto object-contain drop-shadow-[0_0_20px_rgba(0,240,255,0.6)] transition-all group-hover:scale-105 group-hover:drop-shadow-[0_0_30px_rgba(0,240,255,0.8)]" />
                     </div>
                     <div className="flex items-center gap-2 md:gap-4">
+                        {/* REGION SELECTOR (Moved to Header) */}
+                        <div className="relative" ref={regionMenuRef}>
+                            <button onClick={() => setIsRegionMenuOpen(!isRegionMenuOpen)} className={`flex items-center gap-1 md:gap-1.5 px-2 md:px-3 py-1.5 rounded bg-hunter-surface border hover:border-hunter-cyan transition-colors font-mono text-xs ${!regionSelected ? 'border-yellow-500 animate-pulse text-yellow-500' : 'border-hunter-border text-hunter-muted hover:text-white'}`}>
+                                <span className="text-base">{searchRegionFlag}</span>
+                                <span className="hidden md:block font-bold">{searchRegionCode}</span>
+                                <ChevronDown size={12} />
+                            </button>
+                            {/* DROPDOWN MENU */}
+                            <AnimatePresence>
+                                {isRegionMenuOpen && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: 10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: 10 }}
+                                        className="absolute top-full right-0 mt-2 w-64 max-h-80 bg-[#0a0a0a] border border-hunter-border rounded-lg shadow-2xl overflow-hidden flex flex-col z-[9999]"
+                                    >
+                                        {/* Search Header */}
+                                        <div className="p-2 border-b border-hunter-border/50 bg-hunter-surface/50">
+                                            <input
+                                                type="text"
+                                                placeholder="Search country..."
+                                                className="w-full bg-black/50 border border-hunter-border rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-hunter-cyan font-mono"
+                                                autoFocus
+                                                onClick={(e) => e.stopPropagation()}
+                                            />
+                                        </div>
+
+                                        {/* Scrollable List */}
+                                        <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
+                                            {['NORTH_AMERICA', 'EUROPE', 'ASIA', 'OCEANIA', 'SOUTH_AMERICA', 'AFRICA', 'GLOBAL'].map(continent => {
+                                                const continentCountries = ALL_COUNTRIES.filter(c => c.continent === continent);
+                                                if (continentCountries.length === 0) return null;
+                                                return (
+                                                    <div key={continent}>
+                                                        <div className="px-2 py-1 text-[10px] text-hunter-muted font-bold uppercase tracking-wider bg-black/20 mb-1 sticky top-0 mt-2">
+                                                            {continent.replace('_', ' ')}
+                                                        </div>
+                                                        {continentCountries.map(c => (
+                                                            <button key={c.code} onClick={() => handleCountrySelect(c)} className="w-full text-left px-3 py-2 text-xs hover:bg-hunter-cyan/10 hover:text-hunter-cyan rounded flex items-center gap-3 transition-colors">
+                                                                <span className="text-lg">{c.flag}</span> {c.name}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </div>
+
                         <button onClick={() => setDarkMode(!darkMode)} className="p-1.5 md:p-2 text-hunter-muted hover:text-white transition-colors active:scale-90 active:text-hunter-cyan">{darkMode ? <Sun size={16} className="md:w-5 md:h-5" /> : <Moon size={16} className="md:w-5 md:h-5" />}</button>
                         <div className="relative" ref={langMenuRef}>
                             <button onClick={() => setIsLangMenuOpen(!isLangMenuOpen)} className="flex items-center gap-1 md:gap-1.5 px-2 md:px-3 py-1.5 rounded bg-hunter-surface border border-hunter-border hover:border-hunter-cyan text-hunter-muted hover:text-white transition-colors font-mono text-xs"> <Globe size={14} /> <span className="hidden md:block">{languages.find(l => l.code === lang)?.label}</span> </button>
@@ -410,12 +482,21 @@ export default function App() {
                                 <div className="absolute -inset-1 bg-gradient-to-r from-hunter-cyan via-hunter-purple to-hunter-cyan rounded opacity-20 group-hover:opacity-40 blur-lg transition duration-500"></div>
                                 <div className="relative flex items-center bg-black border-2 border-hunter-border group-focus-within:border-hunter-cyan/70 overflow-visible z-50">
                                     <div className="absolute left-0 w-2 h-full bg-hunter-cyan/20"></div>
-                                    <div className="h-full flex items-center border-r border-hunter-border px-1 relative z-[60]" ref={regionMenuRef}>
-                                        <button type="button" onClick={() => setIsRegionMenuOpen(true)} className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-4 md:py-6 h-full hover:bg-hunter-surface transition-colors text-xs font-mono text-hunter-muted hover:text-white"> <span className="text-xl md:text-2xl filter drop-shadow-[0_0_5px_rgba(255,255,255,0.3)]">{searchRegionFlag}</span> <ChevronDown size={10} className="md:w-3 md:h-3 text-hunter-cyan" /> </button>
-
-                                    </div>
-                                    <div className="pl-2 md:pl-4 pr-2 md:pr-4"><Target className="text-hunter-muted group-focus-within:text-hunter-cyan transition-colors" size={20} /></div>
-                                    <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t.searchPlaceholder} className="w-full bg-transparent text-white text-sm md:text-lg lg:text-xl font-mono py-4 md:py-6 focus:outline-none placeholder:text-hunter-muted/50 tracking-wider uppercase placeholder:text-xs md:placeholder:text-base" disabled={status !== SearchStatus.IDLE && status !== SearchStatus.COMPLETE} />
+                                    <div className="pl-4 md:pl-6 pr-2 md:pr-4"><Target className="text-hunter-muted group-focus-within:text-hunter-cyan transition-colors" size={20} /></div>
+                                    <input
+                                        type="text"
+                                        value={query}
+                                        onChange={(e) => setQuery(e.target.value)}
+                                        onFocus={() => {
+                                            if (!regionSelected) {
+                                                addLog("⚠️ SYSTEM ALERT: SELECT TARGET REGION IN HEADER", 'warning');
+                                                setIsRegionMenuOpen(true); // Auto-open the menu
+                                            }
+                                        }}
+                                        placeholder={!regionSelected ? "⚠️ SELECT REGION FIRST..." : t.searchPlaceholder}
+                                        className={`w-full bg-transparent text-white text-sm md:text-lg lg:text-xl font-mono py-4 md:py-6 focus:outline-none tracking-wider uppercase placeholder:text-xs md:placeholder:text-base ${!regionSelected ? 'placeholder:text-yellow-500/70' : 'placeholder:text-hunter-muted/50'}`}
+                                        disabled={status !== SearchStatus.IDLE && status !== SearchStatus.COMPLETE}
+                                    />
                                     <button type="submit" disabled={status !== SearchStatus.IDLE && status !== SearchStatus.COMPLETE} className="bg-hunter-cyan text-black hover:bg-white disabled:bg-gray-800 disabled:text-gray-600 font-display font-black tracking-widest px-4 md:px-8 py-4 md:py-6 transition-all flex items-center gap-1.5 md:gap-2 hover:shadow-[0_0_20px_rgba(0,240,255,0.4)] active:scale-95 active:shadow-[0_0_30px_rgba(0,240,255,0.8)] text-xs md:text-base"> {status === SearchStatus.IDLE || status === SearchStatus.COMPLETE ? <><span className="hidden sm:inline">{t.searchButton}</span><span className="sm:hidden">GO</span> <ArrowRight className="w-4 h-4 md:w-5 md:h-5" /></> : <><Loader2 className="animate-spin w-4 h-4 md:w-5 md:h-5" /> <span className="hidden sm:inline">{t.searching}</span><span className="sm:hidden">...</span></>} </button>
                                 </div>
                             </form>
@@ -431,6 +512,52 @@ export default function App() {
                             <div className="bg-black/40 border border-hunter-border p-4"> <div className="text-[10px] text-hunter-muted uppercase tracking-[0.2em] mb-1 font-display">{t.liveSources}</div> <div className="text-2xl font-mono font-bold text-white">{result.stats.sourcesScanned}</div> </div>
                             <div className="bg-hunter-cyan/10 border border-hunter-cyan/30 p-4 relative overflow-hidden"> <div className="absolute top-0 right-0 w-12 h-12 bg-hunter-cyan blur-2xl opacity-20"></div> <div className="text-[10px] text-hunter-cyan uppercase tracking-[0.2em] mb-1 font-display">{t.estSavings}</div> <div className="text-2xl font-mono font-bold text-white">{result.stats.moneySavedEstimate}</div> </div>
                         </div>
+
+                        {/* GLITCH WATCH WIDGET */}
+                        {glitchStatus && glitchStatus.probability > 10 && (
+                            <div className={`mt-8 mb-8 border p-4 relative overflow-hidden ${glitchStatus.probability > 70 ? 'bg-red-950/30 border-red-500 animate-pulse' : 'bg-yellow-950/20 border-yellow-500/50'}`}>
+                                <div className="flex items-center gap-4 relative z-10">
+                                    <ShieldAlert className={glitchStatus.probability > 70 ? 'text-red-500' : 'text-yellow-500'} size={32} />
+                                    <div>
+                                        <h3 className="text-lg font-display font-bold text-white tracking-widest flex items-center gap-2">
+                                            GLITCH WATCH: {glitchStatus.probability}% PROBABILITY
+                                            {glitchStatus.probability > 70 && <span className="bg-red-500 text-black text-xs px-2 py-0.5 rounded font-mono">CRITICAL</span>}
+                                        </h3>
+                                        <p className="text-hunter-muted text-xs font-mono">{glitchStatus.warning || "Abnormal pricing activity detected on social monitors."}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* INFLUENCER CODES SECTION */}
+                        {influencerCodes.length > 0 && (
+                            <div className="mt-12">
+                                <h2 className="text-xl font-display font-bold mb-6 flex items-center gap-3 text-white">
+                                    <Crown className="text-yellow-500" />
+                                    INFLUENCER DEEP-NET RESULTS
+                                </h2>
+                                <div className="grid gap-4">
+                                    {influencerCodes.map((code, idx) => (
+                                        <div key={idx} className="bg-gradient-to-r from-yellow-900/10 to-black border border-yellow-500/30 p-4 rounded relative overflow-hidden group">
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <div className="text-yellow-500 font-mono text-xs mb-1 flex items-center gap-2">
+                                                        <span>@{code.source.split(' ')[0] || 'Unknown'}</span>
+                                                        <span className="text-hunter-muted">• {code.lastVerified}</span>
+                                                    </div>
+                                                    <div className="font-display font-bold text-2xl text-white tracking-wider mb-1">{code.code}</div>
+                                                    <div className="text-hunter-muted text-sm">{code.description}</div>
+                                                </div>
+                                                <button onClick={() => { navigator.clipboard.writeText(code.code); handleSaveCode(code); }} className="px-4 py-2 bg-yellow-500/10 hover:bg-yellow-500 text-yellow-500 hover:text-black border border-yellow-500/50 rounded transition-all font-mono text-xs font-bold uppercase tracking-wider">
+                                                    COPY
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         {result.codes.length > 0 ? (<div> <h2 className="text-2xl font-display font-bold mb-6 flex items-center gap-3 text-white"> <Crosshair className="text-hunter-green animate-spin-slow" /> {t.verifiedHeader} <span className="text-hunter-cyan">{result.merchantName}</span> </h2> <div className="grid gap-4"> {result.codes.map((code, idx) => (<ResultCard key={idx} code={code} rank={idx} onSave={handleSaveCode} />))} </div> <DealAlert merchant={result.merchantName} /> </div>) : (<div className="bg-red-950/20 border border-red-500/30 p-8 text-center relative overflow-hidden"> <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20"></div> <Frown className="mx-auto text-red-500 mb-4" size={48} /> <h2 className="text-2xl font-display font-bold text-white mb-2 tracking-widest">{t.noCodesHeader}</h2> <p className="text-hunter-muted max-w-lg mx-auto mb-8 font-mono text-sm">{t.noCodesDesc}</p> <div className="flex flex-col items-center gap-4"> <div className="inline-flex items-center gap-2 text-hunter-cyan font-bold text-xs font-display bg-hunter-cyan/10 px-6 py-2 border border-hunter-cyan/20"> <ArrowRight size={16} /> {t.checkingComp} </div> </div> </div>)}
                         {(result.competitors.length > 0) && (<div className="border-t border-hunter-border/50 pt-12"> <h3 className="text-hunter-muted font-display text-xs mb-8 uppercase flex items-center gap-2 tracking-widest"> <Zap size={14} className={result.codes.length === 0 ? 'text-hunter-cyan animate-pulse' : 'text-hunter-muted'} /> {result.codes.length === 0 ? t.compHeaderNone : t.compHeaderFound} </h3> <div className="grid grid-cols-1 md:grid-cols-3 gap-6"> {result.competitors.map((comp, idx) => (<a key={idx} href={comp.url} target="_blank" rel="noopener noreferrer" className="block bg-black/40 hover:bg-hunter-surface p-6 border border-hunter-border hover:border-hunter-cyan transition-all cursor-pointer group relative overflow-hidden"> <div className="absolute top-0 right-0 p-2 opacity-0 group-hover:opacity-100 transition-opacity"><ExternalLink size={14} className="text-hunter-cyan" /></div> <div className="flex justify-between items-start mb-4"><span className="font-bold font-display text-lg text-white group-hover:text-hunter-cyan transition-colors">{comp.name}</span></div> <div className="flex items-center gap-2 mb-4"><span className="text-xs font-mono text-hunter-green bg-hunter-green/10 px-2 py-1 border border-hunter-green/20">{t.saveApprox}{comp.avgSavings}</span></div> <div className="w-full py-2 bg-hunter-border/20 group-hover:bg-hunter-cyan/20 text-xs font-bold text-center text-hunter-muted group-hover:text-hunter-cyan transition-colors font-display tracking-wider">{t.openSite}</div> </a>))} </div> </div>)}
                     </div>
@@ -440,14 +567,7 @@ export default function App() {
             <PricingModal isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onUpgrade={handleUpgrade} />
             {user && <Dashboard isOpen={isDashboardOpen} onClose={() => setIsDashboardOpen(false)} user={user} onLogout={handleLogout} onUpgrade={() => { setIsDashboardOpen(false); setIsPricingOpen(true); }} onUserUpdate={(updatedUser) => setUser(updatedUser)} inboxItems={inbox} historyItems={searchHistory} />}
 
-            {/* REGION MODAL */}
-            <RegionSelectorModal
-                isOpen={isRegionMenuOpen}
-                onClose={() => setIsRegionMenuOpen(false)}
-                regionData={regionData}
-                onSelectCountry={handleCountrySelect}
-                currentRegionCode={searchRegionCode}
-            />
+
         </div>
     );
 }

@@ -1,24 +1,41 @@
 import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, ChevronRight, Globe, ArrowLeft } from 'lucide-react';
-import { Continent, Country } from '../types';
+import { X, ChevronRight, Globe, ArrowLeft, Search } from 'lucide-react';
+import { Country } from '../types';
+import { ALL_COUNTRIES } from '../data/countries';
 
 interface RegionSelectorModalProps {
     isOpen: boolean;
     onClose: () => void;
-    regionData: Record<string, Continent>;
     onSelectCountry: (country: Country) => void;
     currentRegionCode: string;
 }
 
-const RegionSelectorModal: React.FC<RegionSelectorModalProps> = ({ isOpen, onClose, regionData, onSelectCountry, currentRegionCode }) => {
-    const [selectedContinentKey, setSelectedContinentKey] = useState<string | null>(null);
+const RegionSelectorModal: React.FC<RegionSelectorModalProps> = ({ isOpen, onClose, onSelectCountry, currentRegionCode }) => {
+    const [selectedContinent, setSelectedContinent] = useState<string | null>(null);
+    const [searchTerm, setSearchTerm] = useState('');
     const [isBrowser, setIsBrowser] = useState(false);
 
     useEffect(() => {
         setIsBrowser(true);
     }, []);
+
+    // Get unique continents
+    const continents = Array.from(new Set(ALL_COUNTRIES.map(c => c.continent))).map(key => {
+        // Pretty print continent names
+        const name = key.replace('_', ' ').toUpperCase();
+        const countries = ALL_COUNTRIES.filter(c => c.continent === key);
+        return { key, name, countries, icon: key === 'GLOBAL' ? '🌍' : '🗺️' };
+    });
+
+    // Filter logic
+    const filteredCountries = ALL_COUNTRIES.filter(c =>
+        c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.code.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    const isSearching = searchTerm.length > 0;
 
     if (!isBrowser) return null;
 
@@ -45,9 +62,9 @@ const RegionSelectorModal: React.FC<RegionSelectorModalProps> = ({ isOpen, onClo
                         {/* Header */}
                         <div className="flex items-center justify-between p-4 border-b border-hunter-border bg-black/40">
                             <div className="flex items-center gap-2">
-                                {selectedContinentKey ? (
+                                {(selectedContinent && !isSearching) ? (
                                     <button
-                                        onClick={() => setSelectedContinentKey(null)}
+                                        onClick={() => setSelectedContinent(null)}
                                         className="p-1 hover:bg-white/10 rounded-full transition-colors text-hunter-cyan"
                                     >
                                         <ArrowLeft size={20} />
@@ -56,7 +73,7 @@ const RegionSelectorModal: React.FC<RegionSelectorModalProps> = ({ isOpen, onClo
                                     <Globe className="text-hunter-cyan" size={20} />
                                 )}
                                 <h3 className="font-display font-bold text-white tracking-wide">
-                                    {selectedContinentKey ? regionData[selectedContinentKey].name : 'SELECT TARGET REGION'}
+                                    {(selectedContinent && !isSearching) ? selectedContinent.replace('_', ' ') : 'SELECT REGION'}
                                 </h3>
                             </div>
                             <button
@@ -67,68 +84,111 @@ const RegionSelectorModal: React.FC<RegionSelectorModalProps> = ({ isOpen, onClo
                             </button>
                         </div>
 
+                        {/* Search Bar */}
+                        <div className="p-4 border-b border-hunter-border bg-black/20">
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-hunter-muted" size={16} />
+                                <input
+                                    type="text"
+                                    placeholder="Search country..."
+                                    className="w-full bg-black/50 border border-hunter-border rounded-lg pl-10 pr-4 py-3 text-sm text-white focus:outline-none focus:border-hunter-cyan placeholder:text-hunter-muted/50 font-mono"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                />
+                            </div>
+                        </div>
+
                         {/* Body */}
                         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-                            {!selectedContinentKey ? (
-                                // CONTINENTS VIEW
-                                <div className="grid gap-3">
-                                    {Object.entries(regionData).map(([key, continent]) => (
-                                        <button
-                                            key={key}
-                                            onClick={() => {
-                                                if (key === 'GLOBAL') {
-                                                    onSelectCountry(continent.countries[0]);
-                                                    onClose();
-                                                } else {
-                                                    setSelectedContinentKey(key);
-                                                }
-                                            }}
-                                            className="w-full flex items-center justify-between p-4 bg-black/20 border border-hunter-border/50 hover:border-hunter-cyan hover:bg-hunter-cyan/5 rounded-lg transition-all group"
-                                        >
-                                            <div className="flex items-center gap-3">
-                                                <span className="text-2xl filter drop-shadow-[0_0_5px_rgba(255,255,255,0.2)]">
-                                                    {key === 'GLOBAL' ? '🌍' :
-                                                        key === 'NORTH_AMERICA' ? '🌎' :
-                                                            key === 'EUROPE' ? '🌍' :
-                                                                key === 'ASIA' ? '🌏' : '🌍'}
-                                                </span>
-                                                <span className="font-mono text-sm group-hover:text-hunter-cyan transition-colors">
-                                                    {continent.name}
-                                                </span>
-                                            </div>
-                                            {key !== 'GLOBAL' && (
-                                                <ChevronRight className="text-hunter-muted group-hover:text-hunter-cyan transition-colors" size={16} />
-                                            )}
-                                        </button>
-                                    ))}
-                                </div>
-                            ) : (
-                                // COUNTRIES VIEW
-                                <div className="grid gap-3">
-                                    {regionData[selectedContinentKey].countries.map((country) => (
+
+                            {/* IF SEARCHING: Show Flat List */}
+                            {isSearching ? (
+                                <div className="grid gap-2">
+                                    {filteredCountries.map((country) => (
                                         <button
                                             key={country.code}
                                             onClick={() => {
                                                 onSelectCountry(country);
                                                 onClose();
                                             }}
-                                            className={`w-full flex items-center justify-between p-4 border rounded-lg transition-all group ${currentRegionCode === country.code
-                                                    ? 'bg-hunter-cyan/10 border-hunter-cyan'
-                                                    : 'bg-black/20 border-hunter-border/50 hover:border-hunter-cyan hover:bg-hunter-cyan/5'
+                                            className={`w-full flex items-center justify-between p-3 rounded-lg transition-all group border ${currentRegionCode === country.code
+                                                ? 'bg-hunter-cyan/10 border-hunter-cyan'
+                                                : 'bg-black/20 border-hunter-border/30 hover:bg-hunter-cyan/5 hover:border-hunter-cyan/50'
                                                 }`}
                                         >
                                             <div className="flex items-center gap-3">
                                                 <span className="text-2xl">{country.flag}</span>
-                                                <span className={`font-mono text-sm ${currentRegionCode === country.code ? 'text-hunter-cyan font-bold' : 'group-hover:text-hunter-cyan transition-colors'}`}>
+                                                <span className={`font-mono text-sm ${currentRegionCode === country.code ? 'text-hunter-cyan font-bold' : 'text-white'}`}>
                                                     {country.name}
                                                 </span>
                                             </div>
-                                            {currentRegionCode === country.code && (
-                                                <div className="w-2 h-2 rounded-full bg-hunter-cyan shadow-[0_0_8px_#00d2ff]"></div>
-                                            )}
                                         </button>
                                     ))}
+                                    {filteredCountries.length === 0 && (
+                                        <div className="text-center py-6 text-hunter-muted text-sm font-mono">No results found.</div>
+                                    )}
                                 </div>
+                            ) : (
+                                /* IF NOT SEARCHING: Show Continents OR Countries */
+                                !selectedContinent ? (
+                                    // CONTINENT LIST
+                                    <div className="grid gap-3">
+                                        {continents.map((cont) => (
+                                            <button
+                                                key={cont.key}
+                                                onClick={() => {
+                                                    if (cont.key === 'GLOBAL') {
+                                                        // Auto-select Global
+                                                        onSelectCountry(cont.countries[0]);
+                                                        onClose();
+                                                    } else {
+                                                        setSelectedContinent(cont.key);
+                                                    }
+                                                }}
+                                                className="w-full flex items-center justify-between p-4 bg-black/20 border border-hunter-border/50 hover:border-hunter-cyan hover:bg-hunter-cyan/5 rounded-lg transition-all group"
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-2xl filter drop-shadow-[0_0_5px_rgba(255,255,255,0.2)]">
+                                                        {cont.icon}
+                                                    </span>
+                                                    <span className="font-mono text-sm group-hover:text-hunter-cyan transition-colors font-bold tracking-wide">
+                                                        {cont.name}
+                                                    </span>
+                                                </div>
+                                                {cont.key !== 'GLOBAL' && (
+                                                    <ChevronRight className="text-hunter-muted group-hover:text-hunter-cyan transition-colors" size={16} />
+                                                )}
+                                            </button>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    // COUNTRY LIST (For selected continent)
+                                    <div className="grid gap-2">
+                                        {ALL_COUNTRIES.filter(c => c.continent === selectedContinent).map((country) => (
+                                            <button
+                                                key={country.code}
+                                                onClick={() => {
+                                                    onSelectCountry(country);
+                                                    onClose();
+                                                }}
+                                                className={`w-full flex items-center justify-between p-3 rounded-lg transition-all group border ${currentRegionCode === country.code
+                                                    ? 'bg-hunter-cyan/10 border-hunter-cyan'
+                                                    : 'bg-black/20 border-hunter-border/30 hover:bg-hunter-cyan/5 hover:border-hunter-cyan/50'
+                                                    }`}
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-2xl">{country.flag}</span>
+                                                    <span className={`font-mono text-sm ${currentRegionCode === country.code ? 'text-hunter-cyan font-bold' : 'text-white'}`}>
+                                                        {country.name}
+                                                    </span>
+                                                </div>
+                                                {currentRegionCode === country.code && (
+                                                    <div className="w-2 h-2 rounded-full bg-hunter-cyan shadow-[0_0_8px_#00d2ff]"></div>
+                                                )}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )
                             )}
                         </div>
                     </motion.div>
