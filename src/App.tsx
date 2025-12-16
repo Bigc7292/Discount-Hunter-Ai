@@ -14,11 +14,7 @@ import TerminalLog from './components/TerminalLog';
 import ResultCard from './components/ResultCard';
 import AuthModal from './components/AuthModal';
 import PricingModal from './components/PricingModal';
-import Dashboard from './components/Dashboard';
-import BackgroundCanvas from './components/BackgroundCanvas';
-import RegionSelectorModal from './components/RegionSelectorModal';
 
-import HeroSearchBar from './components/HeroSearchBar';
 // import { Continent, Country } from './types'; <--- Unused now
 // import { ALL_COUNTRIES } from './data/countries'; <--- Unused now
 // --- CYBER CURSOR COMPONENT ---
