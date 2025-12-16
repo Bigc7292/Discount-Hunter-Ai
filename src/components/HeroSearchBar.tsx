@@ -1,117 +1,157 @@
-import React, { useState } from 'react';
-import { Search, Loader2, ArrowRight, Target, ShieldAlert } from 'lucide-react';
-import CategoryChips from './CategoryChips';
-import { SearchStatus } from '../types';
+import React, { useRef, useState, useEffect } from 'react';
+import { Search, Loader2, AlertTriangle, ChevronRight, MapPin } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
+// Defined directly in component to avoid circular dependency issues during refactor
 interface HeroSearchBarProps {
     query: string;
     onQueryChange: (val: string) => void;
-    onSearch: (e?: React.FormEvent, override?: string) => void;
-    status: SearchStatus;
+    onSearch: (overrideQuery?: string) => void;
+    status: 'idle' | 'scanning' | 'analyzing' | 'extracting' | 'completed' | 'error';
     searchLocation: string;
     onLocationChange: (val: string) => void;
     showRegionWarning: boolean;
 }
 
 const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
-    query, onQueryChange, onSearch, status,
-    searchLocation, onLocationChange, showRegionWarning
+    query,
+    onQueryChange,
+    onSearch,
+    status,
+    searchLocation,
+    onLocationChange,
+    showRegionWarning
 }) => {
+    const inputRef = useRef<HTMLInputElement>(null);
+    const [isFocused, setIsFocused] = useState(false);
 
-    // Additional internal state to pulse or highlight if validation fails (passed from parent or local)
-    // For now purely relying on props.
+    // Auto-focus on mount
+    useEffect(() => {
+        if (status === 'idle') {
+            const timer = setTimeout(() => inputRef.current?.focus(), 800);
+            return () => clearTimeout(timer);
+        }
+    }, [status]);
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' && status === 'idle' && query.trim()) {
+            onSearch();
+        }
+    };
+
+    const isLoading = status !== 'idle' && status !== 'completed' && status !== 'error';
 
     return (
-        <div className="relative group z-30 perspective-1000 w-full max-w-4xl mx-auto">
-            {/* Quick Filters */}
-            {status === SearchStatus.IDLE && (
-                <div className="mb-6">
-                    <CategoryChips onSelect={(cat) => onSearch(undefined, `${cat} discount codes`)} />
+        <div className="w-full max-w-4xl mx-auto relative z-50">
+            {/* GLOW EFFECT BACKGROUND */}
+            <div className={`absolute -inset-1 bg-gradient-to-r from-hunter-cyan/0 via-hunter-cyan/20 to-hunter-purple/0 rounded-2xl blur-xl transition-opacity duration-500 ${isFocused || isLoading ? 'opacity-100' : 'opacity-30'}`}></div>
+
+            <div className={`
+                relative flex items-center bg-hunter-bg/90 backdrop-blur-xl border rounded-2xl shadow-2xl transition-all duration-300 overflow-visible
+                ${showRegionWarning ? 'border-red-500 ring-1 ring-red-500/50' : isFocused ? 'border-hunter-cyan/50 ring-1 ring-hunter-cyan/30' : 'border-hunter-border'}
+                h-16 md:h-20
+            `}>
+
+                {/* Location Input (New) */}
+                <div className="h-full flex items-center border-r border-hunter-border px-4 relative z-[60] min-w-[140px] md:min-w-[180px]">
+                    <MapPin size={18} className={`shrink-0 mr-2 ${showRegionWarning ? 'text-red-500' : 'text-hunter-cyan'}`} />
+                    <input
+                        type="text"
+                        value={searchLocation}
+                        onChange={(e) => onLocationChange(e.target.value)}
+                        placeholder="Location..."
+                        className="w-full h-full bg-transparent text-white focus:outline-none placeholder:text-hunter-muted/50 text-sm font-mono border-none"
+                    />
                 </div>
-            )}
 
-            {/* Main Bar */}
-            <form
-                onSubmit={(e) => onSearch(e)}
-                className={`relative transform transition-all duration-300 hover:scale-[1.01] ${showRegionWarning ? 'shake-animation' : ''}`}
-            >
-                {/* Glow Effect */}
-                <div className="absolute -inset-1 bg-gradient-to-r from-hunter-cyan via-hunter-purple to-hunter-cyan rounded opacity-20 group-hover:opacity-40 blur-lg transition duration-500"></div>
+                {/* Main Input */}
+                <div className="flex-1 h-full relative flex items-center pl-4 bg-transparent z-[50]">
+                    <Search className={`shrink-0 mr-3 transition-colors ${isFocused ? 'text-hunter-cyan' : 'text-hunter-muted'}`} />
 
-                {/* Warning Toast Indicator (Inline) */}
-                {showRegionWarning && (
-                    <div className="absolute -top-12 left-0 right-0 flex justify-center animate-in fade-in slide-in-from-bottom-2">
-                        <div className="bg-red-500/90 text-white text-xs font-bold font-display px-4 py-2 rounded shadow-lg flex items-center gap-2 border border-red-400">
-                            <ShieldAlert size={14} className="animate-pulse" />
-                            SELECT YOUR HUNTING GROUND
-                            <div className="w-2 h-2 bg-red-400 rotate-45 absolute -bottom-1 left-1/2 -translate-x-1/2"></div>
-                        </div>
-                    </div>
-                )}
+                    <input
+                        ref={inputRef}
+                        type="text"
+                        value={query}
+                        onChange={(e) => onQueryChange(e.target.value)}
+                        onFocus={() => setIsFocused(true)}
+                        onBlur={() => setIsFocused(false)}
+                        onKeyDown={handleKeyDown}
+                        disabled={isLoading}
+                        placeholder={isLoading ? "ESTABLISHING CONNECTION..." : "Enter product (e.g. 'PS5 Slim', 'Nike Air Max')"}
+                        className="w-full bg-transparent text-lg md:text-xl text-white placeholder:text-hunter-muted/50 focus:outline-none font-sans tracking-wide h-full py-2"
+                        autoComplete="off"
+                    />
+                </div>
 
-                <div className={`relative flex items-center bg-black border-2 group-focus-within:border-hunter-cyan/70 overflow-visible z-50
-                    ${showRegionWarning ? 'border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.4)]' : 'border-hunter-border'}
-                `}>
-
-                    {/* Left Accent */}
-                    <div className={`absolute left-0 w-2 h-full transition-colors duration-300 ${showRegionWarning ? 'bg-red-500/50' : 'bg-hunter-cyan/20'}`}></div>
-
-                    {/* Location Input (New) */}
-                    <div className="h-full flex items-center border-r border-hunter-border px-1 relative z-[60] w-[180px]">
-                        <input
-                            type="text"
-                            value={searchLocation}
-                            onChange={(e) => onLocationChange(e.target.value)}
-                            placeholder="LOCATION..."
-                            className="w-full h-full bg-transparent border-none focus:ring-0 text-xs font-mono text-white placeholder-hunter-muted/50 pl-4 pr-2 focus:bg-hunter-cyan/5 transition-colors"
-                        />
-                    </div>
-
-                    {/* Input Field */}
-                    <div className="flex-1 relative h-16 md:h-20 flex items-center">
-                        <div className="absolute left-4 text-hunter-muted"><Target size={20} className="group-focus-within:text-hunter-cyan transition-colors" /></div>
-                        <input
-                            type="text"
-                            value={query}
-                            onChange={(e) => onQueryChange(e.target.value)}
-                            placeholder="PASTE PRODUCT URL OR STORE..."
-                            className={`w-full h-full bg-transparent text-white text-sm md:text-lg lg:text-xl font-mono pl-12 pr-4 focus:outline-none tracking-wider uppercase placeholder:text-xs md:placeholder:text-base transition-colors
-                                placeholder:text-hunter-muted/50
-                            `}
-                            disabled={status !== SearchStatus.IDLE && status !== SearchStatus.COMPLETE}
-                        />
-                        {/* AI Badge */}
-                        <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden md:flex items-center gap-1.5 px-2 py-1 bg-hunter-cyan/5 border border-hunter-cyan/20 rounded text-[9px] text-hunter-cyan font-mono tracking-widest pointer-events-none">
-                            <div className="w-1.5 h-1.5 rounded-full bg-hunter-cyan animate-pulse"></div>
-                            AI ACTIVE
-                        </div>
-                    </div>
-
-                    {/* Deploy Button */}
+                {/* Action Button */}
+                <div className="h-full p-2 relative z-[50]">
                     <button
-                        type="submit"
-                        disabled={status !== SearchStatus.IDLE && status !== SearchStatus.COMPLETE}
-                        className={`h-16 md:h-20 px-6 md:px-10 font-display font-black tracking-widest transition-all flex items-center gap-2 text-xs md:text-base border-l border-hunter-border/30
-                            ${status === SearchStatus.IDLE || status === SearchStatus.COMPLETE
-                                ? 'bg-hunter-cyan text-black hover:bg-white hover:shadow-[0_0_30px_rgba(0,240,255,0.6)]'
-                                : 'bg-gray-900 text-gray-500 cursor-wait'}
+                        onClick={() => onSearch()}
+                        disabled={isLoading || !query.trim()}
+                        className={`
+                            h-full px-6 md:px-8 rounded-xl font-bold text-sm md:text-base tracking-widest transition-all duration-300 flex items-center gap-2 overflow-hidden relative group
+                            ${isLoading
+                                ? 'bg-hunter-surface text-hunter-muted cursor-wait'
+                                : !query.trim()
+                                    ? 'bg-hunter-surface text-hunter-muted cursor-not-allowed opacity-50'
+                                    : 'bg-hunter-cyan text-black hover:bg-white hover:shadow-[0_0_20px_rgba(6,182,212,0.6)]'
+                            }
                         `}
                     >
-                        {status === SearchStatus.IDLE || status === SearchStatus.COMPLETE ? (
-                            <>
-                                <span className="hidden sm:inline">DEPLOY</span>
-                                <span className="sm:hidden">GO</span>
-                                <ArrowRight className="w-4 h-4 md:w-5 md:h-5" />
-                            </>
-                        ) : (
-                            <>
-                                <Loader2 className="animate-spin w-4 h-4 md:w-5 md:h-5" />
-                                <span className="hidden sm:inline">HUNTING</span>
-                            </>
+                        {/* Shimmer effect */}
+                        {!isLoading && query.trim() && (
+                            <div className="absolute inset-0 -translate-x-full group-hover:animate-[shimmer_1.5s_infinite] bg-gradient-to-r from-transparent via-white/30 to-transparent z-10"></div>
                         )}
+
+                        <span className="relative z-20 flex items-center gap-2">
+                            {isLoading ? (
+                                <>
+                                    <Loader2 className="animate-spin" size={18} />
+                                    <span className="hidden md:inline">Processing</span>
+                                </>
+                            ) : (
+                                <>
+                                    <span>HUNT</span>
+                                    <ChevronRight size={18} className={`transition-transform duration-300 ${isFocused && query.trim() ? 'translate-x-1' : ''}`} />
+                                </>
+                            )}
+                        </span>
                     </button>
                 </div>
-            </form>
+
+                {/* Loading Progress Bar */}
+                {isLoading && (
+                    <div className="absolute bottom-0 left-0 w-full h-1 bg-hunter-bg overflow-hidden rounded-b-2xl">
+                        <motion.div
+                            className="h-full bg-hunter-cyan box-glow"
+                            initial={{ width: "0%" }}
+                            animate={{
+                                width: status === 'scanning' ? "30%" :
+                                    status === 'analyzing' ? "60%" :
+                                        status === 'extracting' ? "90%" : "100%"
+                            }}
+                            transition={{ duration: 0.5 }}
+                        />
+                    </div>
+                )}
+            </div>
+
+            {/* Warning Message */}
+            <AnimatePresence>
+                {showRegionWarning && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        className="absolute -bottom-10 left-0 right-0 mx-auto text-center"
+                    >
+                        <div className="inline-flex items-center gap-2 bg-red-500/10 border border-red-500/50 text-red-500 px-4 py-2 rounded-lg backdrop-blur-md">
+                            <AlertTriangle size={16} />
+                            <span className="text-xs font-bold font-mono">LOCATION INPUT REQUIRED</span>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 };
