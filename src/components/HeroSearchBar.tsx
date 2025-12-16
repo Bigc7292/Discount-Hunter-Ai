@@ -1,24 +1,21 @@
 import React, { useState } from 'react';
 import { Search, Loader2, ArrowRight, Target, ShieldAlert } from 'lucide-react';
-import SmartRegionSelector from './SmartRegionSelector';
 import CategoryChips from './CategoryChips';
-import { Country, SearchStatus } from '../types';
+import { SearchStatus } from '../types';
 
 interface HeroSearchBarProps {
     query: string;
     onQueryChange: (val: string) => void;
     onSearch: (e?: React.FormEvent, override?: string) => void;
     status: SearchStatus;
-    searchRegionCode: string;
-    searchRegionFlag: string;
-    onRegionSelect: (country: Country) => void;
-    regionSelected: boolean;
+    searchLocation: string;
+    onLocationChange: (val: string) => void;
     showRegionWarning: boolean;
 }
 
 const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
     query, onQueryChange, onSearch, status,
-    searchRegionCode, searchRegionFlag, onRegionSelect, regionSelected, showRegionWarning
+    searchLocation, onLocationChange, showRegionWarning
 }) => {
 
     // Additional internal state to pulse or highlight if validation fails (passed from parent or local)
@@ -59,13 +56,14 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
                     {/* Left Accent */}
                     <div className={`absolute left-0 w-2 h-full transition-colors duration-300 ${showRegionWarning ? 'bg-red-500/50' : 'bg-hunter-cyan/20'}`}></div>
 
-                    {/* Region Selector */}
-                    <div className="h-16 md:h-20 shrink-0">
-                        <SmartRegionSelector
-                            selectedCode={searchRegionCode}
-                            selectedFlag={searchRegionFlag}
-                            onSelect={onRegionSelect}
-                            warning={showRegionWarning}
+                    {/* Location Input (New) */}
+                    <div className="h-full flex items-center border-r border-hunter-border px-1 relative z-[60] w-[180px]">
+                        <input
+                            type="text"
+                            value={searchLocation}
+                            onChange={(e) => onLocationChange(e.target.value)}
+                            placeholder="LOCATION..."
+                            className="w-full h-full bg-transparent border-none focus:ring-0 text-xs font-mono text-white placeholder-hunter-muted/50 pl-4 pr-2 focus:bg-hunter-cyan/5 transition-colors"
                         />
                     </div>
 
@@ -76,9 +74,9 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
                             type="text"
                             value={query}
                             onChange={(e) => onQueryChange(e.target.value)}
-                            placeholder={!regionSelected ? "WAITING FOR TARGET REGION..." : "PASTE PRODUCT URL OR STORE..."}
+                            placeholder="PASTE PRODUCT URL OR STORE..."
                             className={`w-full h-full bg-transparent text-white text-sm md:text-lg lg:text-xl font-mono pl-12 pr-4 focus:outline-none tracking-wider uppercase placeholder:text-xs md:placeholder:text-base transition-colors
-                                ${!regionSelected ? 'placeholder:text-red-500/50 cursor-not-allowed' : 'placeholder:text-hunter-muted/50'}
+                                placeholder:text-hunter-muted/50
                             `}
                             disabled={status !== SearchStatus.IDLE && status !== SearchStatus.COMPLETE}
                         />

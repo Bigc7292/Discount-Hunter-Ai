@@ -17,9 +17,10 @@ import PricingModal from './components/PricingModal';
 import Dashboard from './components/Dashboard';
 import BackgroundCanvas from './components/BackgroundCanvas';
 import RegionSelectorModal from './components/RegionSelectorModal';
+
 import HeroSearchBar from './components/HeroSearchBar';
-import { Continent, Country } from './types';
-import { ALL_COUNTRIES } from './data/countries';
+// import { Continent, Country } from './types'; <--- Unused now
+// import { ALL_COUNTRIES } from './data/countries'; <--- Unused now
 // --- CYBER CURSOR COMPONENT ---
 const CyberCursor = () => {
     const cursorX = useMotionValue(-100);
@@ -142,9 +143,9 @@ const DealAlert = ({ merchant }: { merchant: string }) => {
 
 export default function App() {
     const [query, setQuery] = useState('');
-    const [searchRegionCode, setSearchRegionCode] = useState('GLOBAL');
-    const [searchRegionFlag, setSearchRegionFlag] = useState('🌍');
-    const [regionSelected, setRegionSelected] = useState(false);
+    const [searchLocation, setSearchLocation] = useState('');
+    // const [searchRegionFlag, setSearchRegionFlag] = useState('🌍'); <--- Removed
+    // const [regionSelected, setRegionSelected] = useState(false); <--- Removed logic
     // NEW STATE: Influencer & Glitch Layers
     const [influencerCodes, setInfluencerCodes] = useState<CouponCode[]>([]);
     const [glitchStatus, setGlitchStatus] = useState<{ probability: number, warning?: string } | null>(null);
@@ -167,7 +168,7 @@ export default function App() {
     const [darkMode, setDarkMode] = useState<boolean>(true);
     const t = translations[lang] || translations['en'];
     const langMenuRef = useRef<HTMLDivElement>(null);
-    const regionMenuRef = useRef<HTMLDivElement>(null);
+    // const regionMenuRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         // Only set up auth listener if Firebase is configured
@@ -214,20 +215,19 @@ export default function App() {
         if (overrideQuery) setQuery(overrideQuery);
 
         // Strict Region Requirement
-        if (!regionSelected) {
-            setShowRegionWarning(true);
-            setIsRegionMenuOpen(true);
-            return;
-        }
+        // if (!regionSelected) { ... } <--- Removed strict region check for simplicity or re-enable if needed for "Location"
+        // For now, allowing search if location is empty (defaults to GLOBAL or passed as empty) or enforcing strict location input.
+        // User asked to "type their location", implying it might be optional or free text.
+        // Let's assume free text is valid.
 
         if (!user && dailySearchesUsed >= 2) { setIsAuthOpen(true); return; }
         if (user && user.dailySearchesUsed >= user.dailySearchLimit) { setIsPricingOpen(true); return; }
         setStatus(SearchStatus.PLANNING); setLogs([]); setResult(null); setInfluencerCodes([]); setGlitchStatus(null); setIsLogExpanded(false); setDailySearchesUsed(prev => prev + 1);
         if (user) { setUser({ ...user, dailySearchesUsed: user.dailySearchesUsed + 1 }); }
-        addLog(`INITIALIZING HUNTER PROTOCOL: "${activeQuery}" REGION: ${searchRegionCode}`, 'system');
+        addLog(`INITIALIZING HUNTER PROTOCOL: "${activeQuery}" REGION: ${searchLocation || 'GLOBAL'}`, 'system');
         try {
             addLog(`CONNECTING TO GLOBAL NODE NETWORK...`, 'system');
-            const plan = await GeminiService.planSearch(activeQuery, searchRegionCode);
+            const plan = await GeminiService.planSearch(activeQuery, searchLocation || 'GLOBAL');
             if (!plan.merchantName) throw new Error("TARGET NOT IDENTIFIED");
             addLog(`TARGET LOCKED: ${plan.merchantName} (${plan.merchantUrl})`, 'success');
             setStatus(SearchStatus.SCANNING);
@@ -300,13 +300,7 @@ export default function App() {
         } catch (error) { console.error(error); addLog('FATAL ERROR IN PIPELINE.', 'error'); setStatus(SearchStatus.ERROR); }
     };
 
-    const handleCountrySelect = (country: Country) => {
-        setSearchRegionCode(country.code);
-        setSearchRegionFlag(country.flag);
-        setIsRegionMenuOpen(false);
-        setRegionSelected(true);
-        setShowRegionWarning(false);
-    };
+    // const handleCountrySelect = ... Removed
 
     // Navigate back to main page
     const handleGoHome = () => {
@@ -451,10 +445,8 @@ export default function App() {
                             onQueryChange={setQuery}
                             onSearch={handleSearch}
                             status={status}
-                            searchRegionCode={searchRegionCode}
-                            searchRegionFlag={searchRegionFlag}
-                            onRegionSelect={handleCountrySelect}
-                            regionSelected={regionSelected}
+                            searchLocation={searchLocation}
+                            onLocationChange={setSearchLocation}
                             showRegionWarning={showRegionWarning}
                         />
                     </div>
