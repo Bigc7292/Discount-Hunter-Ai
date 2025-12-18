@@ -234,119 +234,109 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin }) => {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-            <div className="bg-hunter-surface border border-hunter-border rounded-2xl w-full max-w-md overflow-hidden relative shadow-2xl animate-in zoom-in-95 duration-200 backdrop-blur-md">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-xl p-4">
+            <div className="cyber-glass rounded-2xl w-full max-w-md overflow-hidden relative shadow-[0_0_50px_rgba(0,0,0,0.8)] border-hunter-cyan/30 animate-in zoom-in-95 duration-300">
 
-                <button onClick={onClose} className="absolute top-4 right-4 text-hunter-muted hover:text-white z-10">
+                {/* Decorative scanning line */}
+                <div className="absolute top-0 left-0 w-full h-[1px] bg-hunter-cyan/30 animate-scan"></div>
+
+                <button onClick={onClose} className="absolute top-4 right-4 text-hunter-muted hover:text-hunter-cyan z-10 p-2 hover:bg-hunter-cyan/10 rounded-lg transition-all">
                     <X size={20} />
                 </button>
 
                 <div className="p-8">
-                    {/* Firebase Warning if not configured */}
+                    {/* Firebase Warning */}
                     {!isFirebaseConfigured && (
-                        <div className="mb-4 bg-yellow-900/20 border border-yellow-500/50 text-yellow-200 px-4 py-2 rounded text-xs flex items-center gap-2">
-                            <AlertTriangle size={16} />
-                            <span>Firebase not configured - authentication disabled</span>
+                        <div className="mb-6 bg-red-950/30 border border-red-500/50 text-red-200 px-4 py-3 rounded-lg text-[10px] font-mono flex items-center gap-3 tracking-widest uppercase">
+                            <ShieldAlert size={18} className="text-red-500 animate-pulse" />
+                            <span>OFFLINE MODE: DB SYNC UNAVAILABLE</span>
                         </div>
                     )}
 
-                    {/* Header Text */}
-                    <div className="text-center mb-8">
-                        <h2 className="text-2xl font-bold text-white mb-2 font-display tracking-wide">
-                            {mode === 'login' && 'Welcome Back'}
-                            {mode === 'signup' && 'Join the Hunt'}
-                            {mode === 'admin' && 'Restricted Area'}
-                            {mode === 'verify' && 'Check Your Inbox'}
+                    {/* Header */}
+                    <div className="text-center mb-8 space-y-2">
+                        <div className="text-hunter-cyan text-[10px] font-mono tracking-[0.4em] uppercase opacity-50 mb-1">
+                            {mode === 'admin' ? 'SECURE_UPLINK' : 'IDENT_PROTOCOL'}
+                        </div>
+                        <h2 className="text-3xl font-display font-black text-white tracking-tighter uppercase italic">
+                            {mode === 'login' && 'Re-Link Operative'}
+                            {mode === 'signup' && 'Deploy Operative'}
+                            {mode === 'admin' && 'Root Access'}
+                            {mode === 'verify' && 'Verify Signal'}
                         </h2>
-                        <p className="text-sm text-hunter-muted font-mono">
-                            {mode === 'admin' && 'Authorized personnel only. Access monitored.'}
-                            {mode === 'verify' && `We sent a verification link to ${email}`}
-                            {(mode === 'login' || mode === 'signup') && 'Access our automated discount intelligence network.'}
-                        </p>
+                        <div className="h-0.5 w-12 bg-hunter-cyan mx-auto"></div>
                     </div>
 
-                    {/* Referral Badge */}
-                    {mode === 'signup' && referrer && (
-                        <div className="mb-6 bg-hunter-cyan/10 border border-hunter-cyan/30 rounded-lg p-3 flex items-center gap-3 animate-pulse-fast">
-                            <Gift className="text-hunter-cyan" size={20} />
-                            <div className="text-left">
-                                <div className="text-xs text-hunter-cyan font-bold">REFERRAL APPLIED</div>
-                                <div className="text-[10px] text-hunter-muted">Sign up now to unlock 15 bonus credits from code: <span className="text-white font-mono">{referrer}</span></div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Error Message */}
-                    {error && (
-                        <div className="mb-4 bg-red-900/20 border border-red-500/50 text-red-200 px-4 py-2 rounded text-xs text-center">
-                            {error}
-                        </div>
-                    )}
-
-                    {/* VERIFICATION VIEW */}
+                    {/* Form Content */}
                     {mode === 'verify' ? (
-                        <div className="space-y-6 text-center">
-                            <div className="w-20 h-20 bg-hunter-cyan/10 rounded-full flex items-center justify-center mx-auto animate-pulse">
-                                <Mail size={40} className="text-hunter-cyan" />
+                        <div className="space-y-8 text-center">
+                            <div className="w-24 h-24 bg-hunter-cyan/5 rounded-2xl flex items-center justify-center mx-auto border border-hunter-cyan/20 relative group">
+                                <div className="absolute inset-0 bg-hunter-cyan animate-ping opacity-10 rounded-2xl"></div>
+                                <Mail size={40} className="text-hunter-cyan group-hover:scale-110 transition-transform" />
                             </div>
 
-                            <div className="space-y-2">
-                                <p className="text-sm text-gray-300">
-                                    Click the link in the email we just sent you to activate your account.
-                                </p>
-                                <p className="text-xs text-gray-500">
-                                    Check your spam folder if you don't see it.
+                            <div className="space-y-3">
+                                <p className="text-sm text-hunter-text font-mono tracking-tight leading-relaxed">
+                                    A secure handshake has been dispatched to <span className="text-hunter-cyan">{email}</span>.
+                                    Acknowledge the signal to proceed.
                                 </p>
                             </div>
 
-                            <div className="space-y-3 pt-4">
+                            <div className="space-y-4 pt-4">
                                 <button
                                     onClick={handleVerificationComplete}
                                     disabled={loading}
-                                    className="w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 bg-hunter-cyan hover:bg-hunter-green text-black transition-all font-display tracking-wider disabled:opacity-50"
+                                    className="w-full py-4 rounded-none skew-x-[-10deg] font-display font-black flex items-center justify-center gap-3 bg-hunter-cyan text-black hover:bg-hunter-green transition-all shadow-[0_0_20px_rgba(0,240,255,0.3)] group disabled:opacity-50"
                                 >
-                                    {loading ? <RefreshCw className="animate-spin" size={18} /> : <CheckCircle size={18} />}
-                                    {loading ? 'CHECKING...' : 'I HAVE VERIFIED MY EMAIL'}
+                                    <span className="skew-x-[10deg] flex items-center gap-3 uppercase tracking-wider">
+                                        {loading ? <RefreshCw className="animate-spin" size={20} /> : <CheckCircle size={20} />}
+                                        {loading ? 'ANALYZING...' : 'ACKNOWLEDGE SIGNAL'}
+                                    </span>
                                 </button>
 
                                 <button
                                     onClick={handleResendVerification}
-                                    className="text-xs text-gray-500 hover:text-white underline decoration-dotted"
+                                    className="text-[10px] text-hunter-muted font-mono hover:text-white uppercase tracking-widest transition-colors"
                                 >
-                                    Resend verification email
+                                    Resend Signal Packet
                                 </button>
                             </div>
                         </div>
                     ) : (
-                        /* LOGIN / SIGNUP / ADMIN FORM */
-                        <form onSubmit={handleSubmit} className="space-y-4">
+                        <form onSubmit={handleSubmit} className="space-y-6">
                             {mode !== 'admin' && (
                                 <>
-                                    <div className="space-y-1">
-                                        <label className="text-xs text-hunter-muted font-mono">EMAIL ACCESS</label>
-                                        <div className="relative">
-                                            <Mail className="absolute left-3 top-3 text-hunter-muted" size={18} />
+                                    <div className="space-y-2">
+                                        <div className="flex justify-between">
+                                            <label className="text-[10px] text-hunter-muted font-mono uppercase tracking-widest">EMAIL_STATION</label>
+                                            <span className="text-[10px] text-hunter-cyan/40 font-mono">PORT_8080</span>
+                                        </div>
+                                        <div className="relative group">
+                                            <Mail className="absolute left-3 top-3.5 text-hunter-muted group-focus-within:text-hunter-cyan transition-colors" size={18} />
                                             <input
                                                 type="email"
                                                 required
                                                 value={email}
                                                 onChange={(e) => setEmail(e.target.value)}
-                                                className="w-full bg-black/50 border border-hunter-border rounded-lg py-2.5 pl-10 text-white placeholder:text-hunter-muted/50 focus:border-hunter-cyan focus:outline-none transition-colors"
-                                                placeholder="name@example.com"
+                                                className="w-full bg-black/60 border border-hunter-border rounded-none py-3 pl-10 text-white font-mono text-sm placeholder:text-hunter-muted/30 focus:border-hunter-cyan focus:outline-none transition-all focus:bg-hunter-cyan/5"
+                                                placeholder="operative@network.id"
                                             />
                                         </div>
                                     </div>
-                                    <div className="space-y-1">
-                                        <label className="text-xs text-hunter-muted font-mono">PASSWORD</label>
-                                        <div className="relative">
-                                            <Lock className="absolute left-3 top-3 text-hunter-muted" size={18} />
+                                    <div className="space-y-2">
+                                        <div className="flex justify-between">
+                                            <label className="text-[10px] text-hunter-muted font-mono uppercase tracking-widest">ACCESS_KEY</label>
+                                            <span className="text-[10px] text-hunter-cyan/40 font-mono">ENCRYPTED</span>
+                                        </div>
+                                        <div className="relative group">
+                                            <Lock className="absolute left-3 top-3.5 text-hunter-muted group-focus-within:text-hunter-cyan transition-colors" size={18} />
                                             <input
                                                 type="password"
                                                 required
                                                 minLength={6}
                                                 value={password}
                                                 onChange={(e) => setPassword(e.target.value)}
-                                                className="w-full bg-black/50 border border-hunter-border rounded-lg py-2.5 pl-10 text-white placeholder:text-hunter-muted/50 focus:border-hunter-cyan focus:outline-none transition-colors"
+                                                className="w-full bg-black/60 border border-hunter-border rounded-none py-3 pl-10 text-white font-mono text-sm placeholder:text-hunter-muted/30 focus:border-hunter-cyan focus:outline-none transition-all focus:bg-hunter-cyan/5"
                                                 placeholder="••••••••"
                                             />
                                         </div>
@@ -355,53 +345,74 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin }) => {
                             )}
 
                             {mode === 'admin' && (
-                                <div className="space-y-1">
-                                    <label className="text-xs text-red-500 font-mono">ADMIN KEY</label>
-                                    <div className="relative">
-                                        <ShieldAlert className="absolute left-3 top-3 text-red-500" size={18} />
+                                <div className="space-y-2">
+                                    <label className="text-[10px] text-red-500 font-mono uppercase tracking-widest">ROOT_OVERRIDE_KEY</label>
+                                    <div className="relative group">
+                                        <ShieldAlert className="absolute left-3 top-3.5 text-red-500" size={18} />
                                         <input
                                             type="password"
                                             required
                                             value={adminKey}
                                             onChange={(e) => setAdminKey(e.target.value)}
-                                            className="w-full bg-black/50 border border-red-500/50 rounded-lg py-2.5 pl-10 text-white focus:border-red-500 focus:outline-none placeholder:text-red-900"
-                                            placeholder="Enter system key..."
+                                            className="w-full bg-black/60 border border-red-500/50 rounded-none py-3 pl-10 text-white font-mono text-sm focus:border-red-500 focus:outline-none transition-all placeholder:text-red-900/40"
+                                            placeholder="SYSTEM_AUTH_REQUIRED"
                                         />
                                     </div>
+                                </div>
+                            )}
+
+                            {error && (
+                                <div className="bg-red-950/40 border-l-2 border-red-500 p-3 flex items-center gap-3 animate-in slide-in-from-left-2 duration-300">
+                                    <AlertTriangle size={16} className="text-red-500 shrink-0" />
+                                    <span className="text-[11px] text-red-200 font-mono leading-tight">{error}</span>
                                 </div>
                             )}
 
                             <button
                                 type="submit"
                                 disabled={loading || (!isFirebaseConfigured && mode !== 'admin')}
-                                className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all font-display tracking-wider disabled:opacity-50 ${mode === 'admin'
-                                    ? 'bg-red-600 hover:bg-red-500 text-white'
-                                    : 'bg-hunter-cyan hover:bg-hunter-green text-black'
+                                className={`w-full py-4 rounded-none skew-x-[-10deg] font-display font-black flex items-center justify-center gap-3 transition-all group disabled:opacity-50 relative overflow-hidden ${mode === 'admin'
+                                    ? 'bg-red-600 hover:bg-red-500 text-white shadow-[0_0_20px_rgba(255,0,0,0.3)]'
+                                    : 'bg-hunter-cyan hover:bg-hunter-green text-black shadow-[0_0_20px_rgba(0,240,255,0.3)]'
                                     }`}
                             >
-                                {loading ? 'AUTHENTICATING...' : (
-                                    <>
-                                        {mode === 'login' ? 'LOGIN' : mode === 'signup' ? 'CREATE ACCOUNT' : 'ACCESS SYSTEM'}
-                                        <ArrowRight size={18} />
-                                    </>
-                                )}
+                                <span className="skew-x-[10deg] flex items-center gap-2 uppercase tracking-[0.15em]">
+                                    {loading ? (
+                                        <>
+                                            <RefreshCw className="animate-spin" size={20} />
+                                            SYNCHRONIZING...
+                                        </>
+                                    ) : (
+                                        <>
+                                            {mode === 'login' ? 'INITIALIZE LINK' : mode === 'signup' ? 'ESTABLISH OPERATIVE' : 'BYPASS FIREWALL'}
+                                            <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
+                                        </>
+                                    )}
+                                </span>
                             </button>
                         </form>
                     )}
 
+                    {/* Footer Toggle */}
                     {mode !== 'verify' && (
-                        <div className="mt-6 flex items-center justify-between text-xs text-hunter-muted border-t border-hunter-border pt-4">
+                        <div className="mt-8 flex items-center justify-between text-[10px] text-hunter-muted border-t border-hunter-border pt-6 font-mono tracking-widest uppercase">
                             {mode === 'admin' ? (
-                                <button onClick={() => setMode('login')} className="hover:text-white">
-                                    ← Return to user login
+                                <button onClick={() => setMode('login')} className="hover:text-white transition-colors flex items-center gap-2">
+                                    <ArrowRight size={12} className="rotate-180" /> RETURN_TO_CLIENT
                                 </button>
                             ) : (
                                 <>
-                                    <button onClick={() => setMode(mode === 'login' ? 'signup' : 'login')} className="hover:text-white">
-                                        {mode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Login'}
+                                    <button
+                                        onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
+                                        className="hover:text-hunter-cyan transition-colors"
+                                    >
+                                        {mode === 'login' ? 'NEW_ACCOUNT_REQUIRED' : 'LOG_IN_EXISTING'}
                                     </button>
-                                    <button onClick={() => setMode('admin')} className="text-gray-600 hover:text-red-500 transition-colors">
-                                        Admin
+                                    <button
+                                        onClick={() => setMode('admin')}
+                                        className="text-hunter-muted/30 hover:text-red-500 transition-colors"
+                                    >
+                                        ROOT
                                     </button>
                                 </>
                             )}

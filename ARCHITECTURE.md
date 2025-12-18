@@ -1,86 +1,46 @@
-# 🏗️ Technical Architecture & Data Flow
+# 🏗️ Technical Architecture & Data Flow: Hunter Protocol
 
-This document details the inner workings of CodeSniper. It is designed to help developers (and AI assistants) understand the state management and logic flow.
+This document details the inner workings of Discount Hunter AI. It is designed to help developers (and AI assistants) understand the SaaS-style conversion funnel and the new "Hunter Protocol" center-focused architecture.
 
-## 1. The "Hybrid" Simulation Model
-CodeSniper currently operates in a **Client-Side Simulation Mode**.
-*   **Real Data**: The "Search" results are REAL. We use the Gemini API to fetch actual URLs and codes from the web.
-*   **Simulated Infrastructure**: User accounts, database saving, and the "Headless Browser Validation" steps are simulated using JavaScript timers and probability math.
+## 1. The SaaS Conversion Funnel
+The application is structured as a two-stage funnel:
+1.  **Public Layer (`LandingPage`)**: High-energy Cyber-Tech hero section designed to convert visitors into operatives. No search inputs are available here.
+2.  **Authenticated Layer (`DashboardWorkspace`)**: The central hub for authenticated operatives. Features a center-focused search interface and terminal logging.
 
 ## 2. Component Hierarchy
 
 ```mermaid
-classDiagram
-    App --|> Navbar
-    App --|> HeroSearch
-    App --|> TerminalLog
-    App --|> ResultView
-    App --|> Dashboard
-    App --|> AuthModal
+graph TD
+    App --> LandingPage
+    App --> DashboardWorkspace
+    App --> Sidebar
+    App --> AuthModal
     
-    ResultView --|> ResultCard
-    ResultView --|> CompetitorList
-    ResultView --|> DealAlert
+    DashboardWorkspace --> HeroSearchBar
+    DashboardWorkspace --> TerminalLog
+    DashboardWorkspace --> ResultsDisplay
     
-    class App {
-        +User State
-        +Search Logic
-        +Theme Management
-    }
+    ResultsDisplay --> ResultCard
     
-    class Dashboard {
-        +Profile Tab
-        +Inbox Tab
-        +History Tab
-        +Admin Panel
-    }
+    Sidebar --> Navigation
+    Sidebar --> UserProfile
 ```
 
-## 3. The Search Pipeline (`handleSearch`)
+## 3. The "Hunter Protocol" Search Pipeline
+The core functionality follows a personality-driven sequence:
 
-The core function of the app follows this strict sequence:
+1.  **Deployment**: Operative enters a target (Merchant URL/Name) and optional Location.
+2.  **Breach (Planning)**: Gemini AI identifies the target and maps the extraction route.
+3.  **Raid (Scanning)**: The system simulates "raiding" shadow networks and Discord voids.
+4.  **Extraction (Validation)**: Artificial intelligence verifies code validity with high confidence.
+5.  **Exfiltration (Result)**: Validated codes are presented in the central workspace and archived to the user's Inbox.
 
-1.  **Gatekeeping**:
-    *   Check if User is logged in.
-    *   Check `dailySearchesUsed` vs `dailySearchLimit`.
-2.  **Phase 1: Planning (Gemini)**:
-    *   Send query + Region to `GeminiService.planSearch()`.
-    *   Gemini uses `googleSearch` tool to find the merchant URL and candidate codes.
-    *   Returns a JSON object with `suggestedCodes` and `competitors`.
-3.  **Phase 2: Scanning (Visuals)**:
-    *   The App iterates through a list of "fake" sources (e.g., "Deep Web", "Discord").
-    *   It updates the `TerminalLog` to build suspense.
-4.  **Phase 3: Validation (Heuristics)**:
-    *   For each code returned by Gemini, the App "rolls the dice" based on the `likelySuccessRate`.
-    *   If successful -> Added to `validatedCodes`.
-    *   If failed -> Discarded (hidden from user).
-5.  **Phase 4: Result**:
-    *   Results are rendered.
-    *   Search is saved to `History`.
+## 4. UI/UX: Cyber-Tech Aesthetic
+The app uses a strict "Cyber-Tech" design system defined in `src/index.css`:
+*   **Colors**: Hunter Surface (`#0A0A0F`), Neon Cyan (`#00F0FF`), Neon Purple (`#A855F7`).
+*   **Utilities**: `cyber-glass` (backdrop blur + neon border), `cyber-grid` (retro background grid), `animate-scan` (moving scanning line).
+*   **Animations**: Framer Motion is used for all transitions, emphasizing "deployment" and "glitch" effects.
 
-## 4. Data Models
-
-### User Object
-```typescript
-interface User {
-  id: string;
-  plan: 'free' | 'pro';
-  credits: number;
-  referralCode: string; // "SNIPER-123"
-  isVerified: boolean;
-  dailySearchLimit: number; // 15 (Free) vs 1000 (Pro)
-}
-```
-
-### Search Result
-```typescript
-interface SearchResult {
-  merchantName: string;
-  codes: CouponCode[];
-  competitors: Competitor[];
-  stats: {
-    moneySavedEstimate: string;
-    timeTaken: string;
-  };
-}
-```
+## 5. State Management
+*   **Active Tab**: Controls the main content area in the `DashboardWorkspace` (Overview, Inbox, History, Account).
+*   **Hunter Personality**: Logs are injected with "Aggressive AI" terminology (e.g., "RAIDING", "TARGET COMPROMISED").

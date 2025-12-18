@@ -1,13 +1,14 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Search, Loader2, AlertTriangle, ChevronRight, MapPin } from 'lucide-react';
+import { Search, Loader2, AlertTriangle, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { SearchStatus } from '../types';
+import RegionSelector from './RegionSelector';
 
-// Defined directly in component to avoid circular dependency issues during refactor
 interface HeroSearchBarProps {
     query: string;
     onQueryChange: (val: string) => void;
     onSearch: (overrideQuery?: string) => void;
-    status: 'idle' | 'scanning' | 'analyzing' | 'extracting' | 'completed' | 'error';
+    status: SearchStatus;
     searchLocation: string;
     onLocationChange: (val: string) => void;
     showRegionWarning: boolean;
@@ -27,19 +28,19 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
 
     // Auto-focus on mount
     useEffect(() => {
-        if (status === 'idle') {
+        if (status === SearchStatus.IDLE) {
             const timer = setTimeout(() => inputRef.current?.focus(), 800);
             return () => clearTimeout(timer);
         }
     }, [status]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && status === 'idle' && query.trim()) {
+        if (e.key === 'Enter' && status === SearchStatus.IDLE && query.trim()) {
             onSearch();
         }
     };
 
-    const isLoading = status !== 'idle' && status !== 'completed' && status !== 'error';
+    const isLoading = status !== SearchStatus.IDLE && status !== SearchStatus.COMPLETE && status !== SearchStatus.ERROR;
 
     return (
         <div className="w-full max-w-4xl mx-auto relative z-50">
@@ -52,15 +53,12 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
                 h-16 md:h-20
             `}>
 
-                {/* Location Input (New) */}
-                <div className="h-full flex items-center border-r border-hunter-border px-4 relative z-[60] min-w-[140px] md:min-w-[180px]">
-                    <MapPin size={18} className={`shrink-0 mr-2 ${showRegionWarning ? 'text-red-500' : 'text-hunter-cyan'}`} />
-                    <input
-                        type="text"
+                {/* Location Input (New searchable dropdown) */}
+                <div className="h-full flex items-center border-r border-hunter-border px-3 relative z-[60]">
+                    <RegionSelector
                         value={searchLocation}
-                        onChange={(e) => onLocationChange(e.target.value)}
-                        placeholder="Location..."
-                        className="w-full h-full bg-transparent text-white focus:outline-none placeholder:text-hunter-muted/50 text-sm font-mono border-none"
+                        onChange={onLocationChange}
+                        error={showRegionWarning}
                     />
                 </div>
 
@@ -126,9 +124,9 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
                             className="h-full bg-hunter-cyan box-glow"
                             initial={{ width: "0%" }}
                             animate={{
-                                width: status === 'scanning' ? "30%" :
-                                    status === 'analyzing' ? "60%" :
-                                        status === 'extracting' ? "90%" : "100%"
+                                width: status === SearchStatus.SCANNING ? "30%" :
+                                    status === SearchStatus.PLANNING ? "60%" :
+                                        status === SearchStatus.VALIDATING ? "90%" : "100%"
                             }}
                             transition={{ duration: 0.5 }}
                         />
