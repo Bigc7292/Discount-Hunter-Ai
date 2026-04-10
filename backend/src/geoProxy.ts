@@ -92,13 +92,17 @@ export function formatProxyUrl(proxy: ProxyConfig | undefined): string | undefin
 }
 
 export async function testProxyConnection(proxy: ProxyConfig): Promise<boolean> {
-  const proxyUrl = formatProxyUrl(proxy);
-  if (!proxyUrl) return false;
-
+  if (!proxy) return false;
+  
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    
     const response = await fetch('https://api.ipify.org?format=json', {
-      dispatcher: new (await import('undici')).ProxyAgent({ uri: proxyUrl })
+      signal: controller.signal
     });
+    
+    clearTimeout(timeout);
     return response.ok;
   } catch {
     return false;

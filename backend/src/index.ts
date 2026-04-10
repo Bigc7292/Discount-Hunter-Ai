@@ -71,7 +71,8 @@ app.post('/discover', async (req, res) => {
 // Verification endpoint - REAL testing with browser/proxies
 app.post('/verify', async (req, res) => {
   try {
-    const { merchant, codes, testRegion } = verifyRequestSchema.parse(req.body);
+    const body = verifyRequestSchema.parse(req.body);
+    const { merchant, codes, testRegion } = body;
     
     if (codes.length === 0) {
       return res.json({
@@ -87,12 +88,19 @@ app.post('/verify', async (req, res) => {
     const geo = getGeoLocation(testRegion);
     console.log(`Verifying ${codes.length} codes for ${merchant.name} from ${geo.country}`);
 
-    const result = await verifyCodes(
-      { name: merchant.name, url: merchant.url, region: geo.country },
-      codes,
+    // Transform to match internal types
+    const request = {
+      merchant: { name: merchant.name, url: merchant.url, region: merchant.region || geo.country },
+      codes: codes.map(c => ({ 
+        ...c, 
+        source: c.source || 'Unknown',
+        sourceUrl: c.sourceUrl,
+        discoveredAt: new Date().toISOString() 
+      })),
       testRegion
-    );
+    };
 
+    const result = await verifyCodes(request);
     res.json(result);
   } catch (error) {
     console.error('Verification error:', error);
@@ -103,16 +111,24 @@ app.post('/verify', async (req, res) => {
 // Batch verification
 app.post('/verify-batch', async (req, res) => {
   try {
-    const requests = z.array(verifyRequestSchema).parse(req.body);
+    const requests = verifyRequestSchema.array().parse(req.body);
     
     const results = await Promise.all(
-      requests.map(req => verifyCodes(
-        { name: req.merchant.name, url: req.merchant.url, region: req.merchant.region || 'US' },
-        req.codes,
-        req.testRegion
-      ))
+      requests.map(body => {
+        const geo = getGeoLocation(body.testRegion);
+        const request = {
+          merchant: { name: body.merchant.name, url: body.merchant.url, region: body.merchant.region || geo.country },
+          codes: body.codes.map(c => ({ 
+            ...c, 
+            source: c.source || 'Unknown',
+            sourceUrl: c.sourceUrl,
+            discoveredAt: new Date().toISOString() 
+          })),
+          testRegion: body.testRegion
+        };
+        return verifyCodes(request);
+      })
     );
-
     res.json({ results });
   } catch (error) {
     console.error('Batch verification error:', error);

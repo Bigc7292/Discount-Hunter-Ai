@@ -1,4 +1,4 @@
-import puppeteer, { Browser, Page } from 'puppeteer';
+import puppeteer, { Browser, Page, ElementHandle } from 'puppeteer';
 import type { BrowserTestResult, ProxyConfig } from './types.js';
 import { formatProxyUrl } from './geoProxy.js';
 
@@ -26,6 +26,10 @@ async function closeBrowser(): Promise<void> {
     await browserInstance.close();
     browserInstance = null;
   }
+}
+
+async function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export async function simulateCheckout(
@@ -69,7 +73,7 @@ export async function simulateCheckout(
       timeout
     });
 
-    await page.waitForTimeout(2000);
+    await wait(2000);
 
     const promoInputSelectors = [
       'input[name*="promo"]',
@@ -85,7 +89,7 @@ export async function simulateCheckout(
       'input[aria-label*="coupon"]'
     ];
 
-    let promoInput: puppeteer.ElementHandle<Element> | null = null;
+    let promoInput: ElementHandle<Element> | null = null;
     for (const selector of promoInputSelectors) {
       try {
         promoInput = await page.$(selector);
@@ -115,7 +119,7 @@ export async function simulateCheckout(
       'button[id*="apply"]'
     ];
 
-    let applyButton: puppeteer.ElementHandle<Element> | null = null;
+    let applyButton: ElementHandle<Element> | null = null;
     for (const selector of applyButtonSelectors) {
       try {
         applyButton = await page.$(selector);
@@ -127,7 +131,7 @@ export async function simulateCheckout(
 
     if (applyButton) {
       await applyButton.click();
-      await page.waitForTimeout(3000);
+      await wait(3000);
     }
 
     const priceInfo = await extractPriceInfo(page);
