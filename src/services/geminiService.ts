@@ -1,43 +1,51 @@
 import { CouponCode, Competitor } from "../types";
 
-// IMPORTANT: In Vite, environment variables must be prefixed with VITE_ and accessed via import.meta.env
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 
 if (!apiKey) {
-  console.warn('⚠️ VITE_GEMINI_API_KEY not found. Gemini AI features will not work. Please add it to your .env file or Vercel environment variables.');
+  console.warn('⚠️ VITE_GEMINI_API_KEY not found. Gemini AI features will not work.');
 }
 
-// CHANGED: Upgraded to Gemini 3.0 Pro for Thinking capabilities
 const modelName = "gemini-3-pro-preview";
+
+interface DiscoveredCode {
+  code: string;
+  description: string;
+  source: string;
+  sourceUrl?: string;
+  discoveredAt: string;
+  discoveryConfidence: number;
+}
 
 interface SearchResponse {
   merchantName: string;
   merchantUrl: string;
-  suggestedCodes: {
+  suggestedCodes: DiscoveredCode[];
+  competitors: Competitor[];
+  groundingUrls?: string[];
+}
+
+interface PlanSearchResult {
+  merchantName: string;
+  merchantUrl: string;
+  suggestedCodes: Array<{
     code: string;
     description: string;
     source: string;
     likelySuccessRate: number;
-  }[];
-  competitors: {
-    name: string;
-    url: string;
-    avgSavings: string;
-  }[];
+  }>;
+  competitors: Competitor[];
   groundingUrls?: string[];
 }
 
-// Dynamic import wrapper - only loads Google GenAI library when actually needed
-// This prevents the library from crashing on import when API key is missing
 let aiInstance: any = null;
 
 async function getAI() {
   if (!apiKey) {
-    throw new Error('VITE_GEMINI_API_KEY is not configured. Please add it to your environment variables.');
+    throw new Error('VITE_GEMINI_API_KEY is not configured');
   }
 
   if (!aiInstance) {
-    // Dynamic import - only loads when this function is called
     const { GoogleGenAI } = await import("@google/genai");
     aiInstance = new GoogleGenAI({ apiKey });
   }
@@ -45,15 +53,34 @@ async function getAI() {
   return aiInstance;
 }
 
-/**
- * uses Gemini 3.0 Pro with Deep Thinking to find and STRICTLY VALIDATE codes.
- * Includes a fallback to standard generation if Search is restricted (403).
- */
-export const planSearch = async (query: string, region: string = 'GLOBAL'): Promise<SearchResponse> => {
+function estimateDiscoveryConfidence(code: DiscoveredCode, sourceAge?: string): number {
+  let confidence = 30;
 
-  // If no API key, return empty results immediately without trying to load the library
+  const recentSources = ['reddit', 'twitter', 'x.com', 'instagram', 'tiktok', 'facebook'];
+  if (recentSources.some(s => code.source.toLowerCase().includes(s))) {
+    confidence += 25;
+  }
+
+  const officialSources = ['official', 'newsletter', 'email', '官网', 'site'];
+  if (officialSources.some(s => code.source.toLowerCase().includes(s))) {
+    confidence += 30;
+  }
+
+  const spamSources = ['coupon', 'deals', 'promo', 'discount'];
+  if (spamSources.some(s => code.source.toLowerCase().includes(s))) {
+    confidence -= 10;
+  }
+
+  if (code.description.toLowerCase().includes('verified') || 
+      code.description.toLowerCase().includes('confirmed')) {
+    confidence += 15;
+  }
+
+  return Math.max(15, Math.min(85, confidence));
+}
+
+export const planSearch = async (query: string, region: string = 'GLOBAL'): Promise<PlanSearchResult> => {
   if (!apiKey) {
-    console.warn('Cannot search: VITE_GEMINI_API_KEY is not configured');
     return {
       merchantName: query,
       merchantUrl: `https://${query.replace(/\s/g, '').toLowerCase()}.com`,
@@ -63,122 +90,124 @@ export const planSearch = async (query: string, region: string = 'GLOBAL'): Prom
     };
   }
 
-  const regionInstruction = region !== 'GLOBAL'
-    ? `LOCATION CONSTRAINT: The user is located in ${region}. You MUST prioritize codes valid in ${region} (e.g., .ae for UAE, .co.uk for UK). Ignore codes that are strictly valid only in other regions.`
-    : `LOCATION: Global/International search.`;
+  const regionConstraint = region !== 'GLOBAL'
+    ? `CRITICAL LOCATION REQUIREMENT: The user is in ${region}. Find codes specifically valid for ${region}. For UAE use .ae domains/Emirates sources. For UK use .co.uk/UK-specific sources.`
+    : 'Location: Global search.';
 
-  // UPGRADED PROMPT: STRICT VERIFICATION PROTOCOL
   const prompt = `
-      User is searching for discount codes for: "${query}".
-      ${regionInstruction}
-      
-      *** DEADLY IMPORTANT: STRICT VERIFICATION PROTOCOL ***
-      
-      Your goal is NOT just to find text that looks like a code. Your goal is VALIDATION.
-      You must act as an Autonomous Agent performing a "Virtual Checkout Simulation".
-      
-      PHASE 1: SEARCH & DISCOVERY
-      1. ACCESS the Google Search Index immediately.
-      2. SEARCH for official merchant pages, social media (Twitter/X), and real-time community threads (Reddit, Slickdeals).
-      
-      PHASE 2: VIRTUAL AI ENVIRONMENT SIMULATION (THINKING MODE)
-      For every potential code you find, you must mentally simulate the following "Physical Verification" steps:
-      1.  **Navigate**: Conceptually visit the merchant's checkout page for the specific region.
-      2.  **Cart Simulation**: Imagine adding a relevant high-value item (e.g., if searching "Emirates", simulate booking a Flight to Dubai).
-      3.  **Input Test**: Simulate entering the code into the promo field.
-      4.  **Constraint Check**: Check terms (Expiry, New Customer Only, Minimum Spend).
-      
-      STRICT RULES:
-      - If a code is found on a spammy coupon site but not verified by a human on a forum/social media in the last 24 hours: REJECT IT.
-      - If the code looks like a placeholder (e.g., "DEAL50" with no success reports): REJECT IT.
-      - It is better to return ZERO codes than ONE fake code.
-      - **ZERO TOLERANCE POLICY:** The user is launching this app publicly. If you provide a non-working code, the user's reputation is destroyed. 
-      - **ONLY return codes you are 99% confident would work RIGHT NOW.**
-      - If you find NO working codes, return an empty list. Do NOT hallucinate or guess.
-      
-      OUTPUT FORMAT:
-      Return a STRICT JSON string (no markdown formatting, no backticks) with this structure:
-      {
-        "merchantName": "Store Name",
-        "merchantUrl": "https://store.com",
-        "estimatedTotalSavings": "$25.00",
-        "suggestedCodes": [
-           { "code": "CODE1", "description": "10% off", "source": "Reddit/Verified", "likelySuccessRate": 95, "estimatedSavings": "$15.00" },
-           ...
-        ],
-        "competitors": [
-           { "name": "Comp1", "url": "url", "avgSavings": "15%" },
-           ...
-        ]
-      }
-      
-      IMPORTANT: For estimatedSavings, calculate a realistic dollar/currency amount based on typical order values for that merchant. For example:
-      - "10% off" at Nike with avg order $150 = "$15.00"
-      - "$20 off $100+" = "$20.00"
-      - "Free shipping" = "$8.00" (typical shipping cost)
-      `;
-
+    User is searching for discount codes for: "${query}".
+    ${regionConstraint}
+    
+    MISSION: Discover valid discount codes through real source verification.
+    
+    PHASE 1: MERCHANT IDENTIFICATION
+    - Identify the official merchant name and website
+    - Determine the merchant's primary region and where they offer discounts
+    
+    PHASE 2: DISCOVERY (NOT verification - just finding candidates)
+    Search for codes from these sources:
+    1. Official merchant pages and newsletters
+    2. Reddit (r/frugal, r/deals, merchant-specific subs)
+    3. Twitter/X posts from official accounts or deal finders
+    4. Deal aggregators (Slickdeals, HotDeal, etc.)
+    5. Influencer social media posts
+    
+    PHASE 3: SOURCE EVALUATION
+    For each code found, assess:
+    - Source reliability (official > community > aggregator)
+    - Recency of reports
+    - Geographic validity
+    - Any restrictions or minimums
+    
+    OUTPUT FORMAT (STRICT JSON):
+    {
+      "merchantName": "Store Name",
+      "merchantUrl": "https://store.com",
+      "suggestedCodes": [
+        { 
+          "code": "CODE123", 
+          "description": "10% off your order", 
+          "source": "Reddit r/frugal (2 hours ago)", 
+          "sourceUrl": "https://reddit.com/...",
+          "discoveredAt": "2025-01-01",
+          "discoveryConfidence": 65
+        }
+      ],
+      "competitors": [
+        { "name": "Competitor", "url": "url", "avgSavings": "15%" }
+      ]
+    }
+    
+    IMPORTANT:
+    - Return ONLY codes you found from real sources
+    - Set discoveryConfidence based on source reliability (0-100)
+    - Do NOT guess or hallucinate codes
+    - If no codes found, return empty suggestedCodes array
+    - Focus on codes with recent (within 7 days) reports
+  `;
 
   try {
-    const geminiAI = await getAI(); // Get AI instance (will throw if no API key)
+    const geminiAI = await getAI();
     let response;
     let foundUrls: string[] = [];
 
-    // ATTEMPT 1: Try with Google Search Grounding + Thinking
     try {
       response = await geminiAI.models.generateContent({
         model: modelName,
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
-          // CRITICAL: Thinking Budget set to Max (32k) for deep verification simulation
-          thinkingConfig: { thinkingBudget: 32768 }
+          thinkingConfig: { thinkingBudget: 16384 }
         }
       });
 
-      // Extract Grounding Metadata (Real URLs found)
       const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       foundUrls = groundingChunks
         .map((c: any) => c.web?.uri)
-        .filter((uri: string) => uri); // Filter undefined
+        .filter((uri: string) => uri);
 
     } catch (e: any) {
-      // Catch Permission Denied (403) or other tool-related errors
-      console.warn("Search Grounding/Thinking failed (falling back to standard):", e.message);
-
-      // ATTEMPT 2: Fallback to standard internal knowledge (Flash) if Pro fails
+      console.warn("Search with grounding failed, using fallback:", e.message);
+      
       response = await geminiAI.models.generateContent({
         model: "gemini-2.5-flash",
         contents: prompt,
       });
     }
 
-    // Clean up response text to ensure it's valid JSON
     let text = response.text || "{}";
     text = text.replace(/```json/g, '').replace(/```/g, '').trim();
 
-    // Parse the JSON
-    let parsedData;
+    let parsedData: SearchResponse;
     try {
       parsedData = JSON.parse(text);
     } catch (e) {
-      console.warn("JSON Parse failed, attempting fallback repair", e);
+      console.warn("JSON parse failed:", e);
       parsedData = {
         merchantName: query,
-        merchantUrl: "",
+        merchantUrl: `https://${query.replace(/\s/g, '').toLowerCase()}.com`,
         suggestedCodes: [],
         competitors: []
       };
     }
 
+    const suggestedCodes = (parsedData.suggestedCodes || []).map((code: DiscoveredCode) => ({
+      code: code.code,
+      description: code.description,
+      source: code.source,
+      likelySuccessRate: estimateDiscoveryConfidence(code)
+    }));
+
     return {
-      ...parsedData,
-      groundingUrls: foundUrls // Attach real sources if Attempt 1 succeeded
+      merchantName: parsedData.merchantName || query,
+      merchantUrl: parsedData.merchantUrl || `https://${query.replace(/\s/g, '').toLowerCase()}.com`,
+      suggestedCodes,
+      competitors: parsedData.competitors || [],
+      groundingUrls: foundUrls
     };
 
   } catch (error) {
     console.error("Gemini Planning Critical Failure:", error);
-    // Ultimate fallback to prevent app crash
     return {
       merchantName: query,
       merchantUrl: `https://${query.replace(/\s/g, '').toLowerCase()}.com`,
@@ -189,11 +218,7 @@ export const planSearch = async (query: string, region: string = 'GLOBAL'): Prom
   }
 };
 
-/**
- * Generates a realistic "Log" entry.
- */
 export const generateLogMessage = async (merchant: string, phase: 'scanning' | 'validating') => {
-  // If no API key, return a fallback message immediately
   if (!apiKey) {
     return phase === 'scanning'
       ? `Scanning ${merchant} database nodes...`
@@ -201,77 +226,68 @@ export const generateLogMessage = async (merchant: string, phase: 'scanning' | '
   }
 
   try {
-    const prompt = phase === 'scanning'
-      ? `Generate a highly technical log line about an autonomous agent searching for ${merchant} coupons. Mention "Virtual Environment" or "Search Index".`
-      : `Generate a log line about strictly validating a code on ${merchant} by simulating a checkout. Example: "Simulating cart checkout...", "Injecting code into DOM...", "Verifying expiry headers...".`;
-
     const geminiAI = await getAI();
+    const prompt = phase === 'scanning'
+      ? `Generate a technical log line about discovering discount codes for ${merchant}.`
+      : `Generate a log line about verifying a discount code at ${merchant}.`;
+
     const response = await geminiAI.models.generateContent({
-      model: "gemini-2.5-flash", // Use flash for small log generation tasks
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: { maxOutputTokens: 30 }
     });
-    return response.text?.trim() || `Processing ${merchant} data...`;
+    return response.text?.trim() || `Processing ${merchant}...`;
   } catch (e) {
     return `Analyzing ${merchant} nodes...`;
   }
 };
 
-/**
- * HAGGLE GOD AI: Generates a psychological negotiation script.
- */
 export const generateNegotiationScript = async (merchant: string, strategy: string): Promise<string> => {
-  if (!apiKey) return "Error: API connection lost. Please verify credentials.";
+  if (!apiKey) return "Error: API connection lost.";
 
   try {
     const geminiAI = await getAI();
     const prompt = `
-            ACT AS: A Master of Social Engineering and Pricing Negotiation.
-            GOAL: Write a short, persuasive live-chat message for a user to copy-paste to ${merchant}'s support agent.
-            STRATEGY: ${strategy}.
-            
-            RULES:
-            1. Be polite but firm.
-            2. Sound 100% human (no "As an AI language model"). 
-            3. Use Cialdini's principles (Reciprocity, or Loss Aversion).
-            4. Keep it under 280 characters if possible, or 2 short sentences.
-            
-            OUTPUT: Just the direct message text.
-        `;
+      ACT AS: A pricing negotiation expert.
+      GOAL: Write a short, persuasive message for ${merchant} customer support.
+      STRATEGY: ${strategy}
+      
+      RULES:
+      1. Be polite but firm
+      2. Sound human
+      3. Keep under 280 characters
+      4. Just output the direct message text
+    `;
 
     const response = await geminiAI.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt,
     });
 
-    return response.text?.trim() || "Hi! I love your products. Do you have any hidden codes for a new customer today?";
+    return response.text?.trim() || "Hi! I'm interested in your products. Do you have any current discounts?";
   } catch (error) {
-    console.error("Negotiation Generation Failed:", error);
-    return "Hey there! I'm about to check out but found a similar item cheaper elsewhere. Is there any discount you can offer so I can buy from you instead?";
+    return "Hi! I'm interested in your products. Do you have any current discounts?";
   }
 };
 
-// --- NEW FEATURES: INFLUENCER & GLITCH LAYERS ---
-
 export async function findInfluencerCodes(merchantName: string): Promise<CouponCode[]> {
+  if (!apiKey) return [];
+
   try {
     const geminiAI = await getAI();
     const prompt = `
-        Act as a "Social Media Scraper" AI. 
-        Target Merchant: "${merchantName}".
-        Task: Simulate scanning Instagram, TikTok, and Twitter for ACTIVE influencer codes.
-        
-        Rules:
-        1. Look for patterns like [FirstName]20, [Handle]15, or [Event]Sale.
-        2. Generate 2-3 highly plausible "Influencer" style codes.
-        3. Do NOT invent generic codes like "Welcome10". Find specific influencer handles.
-        4. Return JSON ONLY: [{ "code": "SARAHFIT20", "description": "20% off (Influencer: SarahFit)", "successRate": 85, "source": "Instagram Bio" }]
-        `;
+      Act as a social media code finder for ${merchantName}.
+      Find influencer codes from Instagram, TikTok, Twitter.
+      
+      Return JSON array: [{ "code": "HANDLE20", "description": "20% off", "source": "Instagram @handle", "successRate": 70 }]
+      Return empty array if none found.
+    `;
 
     const result = await geminiAI.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt
     });
+
     const responseText = result.text?.() || "[]";
     const jsonMatch = responseText.match(/\[.*\]/s);
 
@@ -279,37 +295,35 @@ export async function findInfluencerCodes(merchantName: string): Promise<CouponC
 
     const codes = JSON.parse(jsonMatch[0]);
     return codes.map((c: any) => ({
-      ...c,
-      lastVerified: 'Seen 2h ago', // Simulated freshness
-      isVerified: true // "Socially Verified"
+      code: c.code,
+      description: c.description,
+      successRate: c.successRate || 50,
+      lastVerified: 'Recently found',
+      source: c.source || 'Social Media',
+      isVerified: false,
+      status: 'unverified' as const
     }));
 
   } catch (error) {
-    console.error("Influencer scan failed (silent fail):", error);
     return [];
   }
 }
 
 export async function checkGlitchProbability(merchantName: string): Promise<{ probability: number, warning?: string }> {
+  if (!apiKey) return { probability: 0 };
+
   try {
     const geminiAI = await getAI();
     const prompt = `
-        Act as a "Price Error Detection" AI.
-        Target Merchant: "${merchantName}".
-        Task: Analyze recent social sentiment and volume for "price glitches", "mistakes", or "pricing errors".
-        
-        Return JSON ONLY: { "probability": number (0-100), "warning": "string message or null" }
-        
-        Logic:
-        - If merchant is known for glitches (e.g., Amazon, Walmart, Airlines), give 15-30%.
-        - If merchant is stable, give 0-5%.
-        - Simulate a random "spike" (1 in 20 chance) where probability > 80% to simulate a live event.
-        `;
+      Check for price glitches or errors for ${merchantName}.
+      Return JSON: { "probability": 0-100, "warning": "message or null" }
+    `;
 
     const result = await geminiAI.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt
     });
+
     const responseText = result.text?.() || "{}";
     const jsonMatch = responseText.match(/\{.*\}/s);
 
@@ -318,7 +332,6 @@ export async function checkGlitchProbability(merchantName: string): Promise<{ pr
     return JSON.parse(jsonMatch[0]);
 
   } catch (error) {
-    console.error("Glitch check failed:", error);
     return { probability: 0 };
   }
 }

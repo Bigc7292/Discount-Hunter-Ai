@@ -1,21 +1,26 @@
 
 export enum SearchStatus {
   IDLE = 'IDLE',
-  PLANNING = 'PLANNING', // AI analyzing the request
-  SCANNING = 'SCANNING', // Browsing "sources"
-  VALIDATING = 'VALIDATING', // "Headless browser" phase
+  PLANNING = 'PLANNING',
+  DISCOVERING = 'DISCOVERING',
+  VERIFYING = 'VERIFYING',
   COMPLETE = 'COMPLETE',
   ERROR = 'ERROR'
 }
+
+export type CodeStatus = 'verified' | 'failed' | 'expired' | 'error' | 'unverified';
 
 export interface CouponCode {
   code: string;
   description: string;
   discountAmount?: string;
-  successRate: number; // 0-100
-  lastVerified: string; // ISO date or "Just now"
-  source: string; // e.g., "r/frugalmalefashion", "Email Newsletter"
+  successRate: number;
+  lastVerified: string;
+  source: string;
   isVerified: boolean;
+  status?: CodeStatus;
+  testedRegion?: string;
+  errorMessage?: string;
 }
 
 export interface Competitor {
@@ -36,7 +41,7 @@ export interface SearchResult {
     timeTaken: string;
     moneySavedEstimate: string;
   };
-  groundingUrls?: string[]; // New: Real URLs found by Google Search
+  groundingUrls?: string[];
 }
 
 export interface LogEntry {
@@ -44,7 +49,7 @@ export interface LogEntry {
   timestamp: string;
   message: string;
   type: 'info' | 'success' | 'warning' | 'error' | 'system';
-  source?: string; // e.g., "Worker-1", "Puppeteer"
+  source?: string;
 }
 
 export interface InboxItem {
@@ -53,6 +58,10 @@ export interface InboxItem {
   code: string;
   description: string;
   savedAt: string;
+  expiresAt?: string;
+  successRate?: number;
+  isVerified?: boolean;
+  status?: CodeStatus;
 }
 
 export interface HistoryEntry {
@@ -68,16 +77,16 @@ export interface User {
   email: string;
   role: 'user' | 'admin';
   plan: 'free' | 'pro';
-  searchCount: number; // Total lifetime searches
-  dailySearchesUsed: number; // New: For daily limit tracking
-  dailySearchLimit: number; // New: Limit based on plan (15 for trial)
-  referralCode: string; // Unique code for sharing
-  referralsCount: number; // How many people they referred
-  credits: number; // Earned credits
+  searchCount: number;
+  dailySearchesUsed: number;
+  dailySearchLimit: number;
+  credits: number;
+  referralCode: string;
+  referralsCount: number;
   joinedDate: string;
-  isVerified: boolean; // New: Email verification status
-  referredBy?: string; // New: The code of the user who referred this user
-  trialEndsAt?: string; // New: Expiration date for the free trial
+  isVerified: boolean;
+  referredBy?: string;
+  trialEndsAt?: string;
 }
 
 export interface PricingTier {

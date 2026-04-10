@@ -8,7 +8,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, collection, addDoc, query as firestoreQuery, onSnapshot, orderBy } from 'firebase/firestore';
 
 import { SearchStatus, SearchResult, LogEntry, User, CouponCode, InboxItem, HistoryEntry } from './types';
-import * as GeminiService from './services/geminiService';
+import { runSearch } from './services/searchService';
 import { subscribeToRecentSavings, formatSavingForTicker, RecentSaving } from './services/recentSavingsService';
 import TerminalLog from './components/TerminalLog';
 import ResultCard from './components/ResultCard';
@@ -217,87 +217,23 @@ export default function App() {
         if (!activeQuery.trim()) return;
         if (overrideQuery) setQuery(overrideQuery);
 
-        // Strict Region Requirement
-        // if (!regionSelected) { ... } <--- Removed strict region check for simplicity or re-enable if needed for "Location"
-        // For now, allowing search if location is empty (defaults to GLOBAL or passed as empty) or enforcing strict location input.
-        // User asked to "type their location", implying it might be optional or free text.
-        // Let's assume free text is valid.
-
         if (!user && dailySearchesUsed >= 2) { setIsAuthOpen(true); return; }
         if (user && user.dailySearchesUsed >= user.dailySearchLimit) { setIsPricingOpen(true); return; }
-        setStatus(SearchStatus.PLANNING); setLogs([]); setResult(null); setInfluencerCodes([]); setGlitchStatus(null); setIsLogExpanded(false); setDailySearchesUsed(prev => prev + 1);
+
+        setDailySearchesUsed(prev => prev + 1);
         if (user) { setUser({ ...user, dailySearchesUsed: user.dailySearchesUsed + 1 }); }
-        addLog(`INITIALIZING HUNTER PROTOCOL: "${activeQuery}" REGION: ${searchLocation || 'GLOBAL'}`, 'system');
-        try {
-            addLog(`BREACHING GLOBAL DATA NODES...`, 'system');
-            const plan = await GeminiService.planSearch(activeQuery, searchLocation || 'GLOBAL');
-            if (!plan.merchantName) throw new Error("TARGET NOT IDENTIFIED");
-            addLog(`TARGET COMPROMISED: ${plan.merchantName} (${plan.merchantUrl})`, 'success');
-            setStatus(SearchStatus.SCANNING);
-            const simulationSteps = ['SHADOW NETWORKS', 'PRIVATE API NODES', 'DISCORD VOIDS', 'ENCRYPTED CHANNELS', 'LEAKED REPOSITORIES'];
-            for (const source of simulationSteps) { await delay(300 + Math.random() * 400); addLog(`RAIDING ${source}...`, 'info'); }
-            const totalCodes = plan.suggestedCodes.length;
-            setStatus(SearchStatus.VALIDATING);
-            const validatedCodes: CouponCode[] = [];
-            const startTime = Date.now();
-            for (let i = 0; i < totalCodes; i++) {
-                const suggestion = plan.suggestedCodes[i];
-                addLog(`CRACKING ${suggestion.code}...`, 'system');
-                await delay(800);
 
-                addLog(`ENCRYPTION BYPASSED: ${suggestion.code} [EXTRACTION SUCCESS]`, 'success');
-                validatedCodes.push({
-                    code: suggestion.code,
-                    description: suggestion.description,
-                    successRate: 100,
-                    lastVerified: 'Just now',
-                    source: suggestion.source || 'Verified Source',
-                    isVerified: true
-                });
-            }
-            setStatus(SearchStatus.COMPLETE);
-            setResult({ merchantName: plan.merchantName, merchantUrl: plan.merchantUrl, codes: validatedCodes, competitors: plan.competitors, groundingUrls: plan.groundingUrls, stats: { sourcesScanned: (plan.groundingUrls?.length || 0) + 12, codesTested: totalCodes, timeTaken: `${((Date.now() - startTime) / 1000).toFixed(1)}s`, moneySavedEstimate: (plan as any).estimatedTotalSavings || (validatedCodes.length > 0 ? 'Calculating...' : '$0.00') } });
-
-            // --- INFLUENCER & GLITCH LAYERS (ADDITIVE) ---
-            addLog('FORCE_SCANNING SOCIAL LAYER...', 'info');
-            GeminiService.findInfluencerCodes(plan.merchantName).then(codes => {
-                if (codes.length > 0) {
-                    setInfluencerCodes(codes);
-                    addLog(`INTEL GATHERED: ${codes.length} HIGH-VALUE INFLUENCER TARGETS`, 'success');
-                }
-            });
-
-            GeminiService.checkGlitchProbability(plan.merchantName).then(status => {
-                setGlitchStatus(status);
-                if (status.probability > 50) {
-                    addLog(`GLITCH DETECTED: ${status.probability}% SYSTEM VULNERABILITY`, 'warning');
-                }
-            });
-
-            // Auto-save verified codes to User Inbox
-            if (user && validatedCodes.length > 0) {
-                // Add to history first (UI update)
-                setSearchHistory(prev => [{ id: Math.random().toString(36).substring(7), merchant: plan.merchantName, query: activeQuery, resultCount: validatedCodes.length, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }, ...prev]);
-
-                // Save to Firestore Inbox
-                try {
-                    validatedCodes.forEach(async (code) => {
-                        await addDoc(collection(db, "users", user.id, "inbox"), {
-                            code: code.code,
-                            merchant: plan.merchantName,
-                            description: code.description,
-                            savedAt: new Date().toISOString(),
-                            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // Assume 7 days validity
-                            successRate: code.successRate,
-                            isVerified: true
-                        });
-                    });
-                    addLog(`SECURE STORAGE: ${validatedCodes.length} CODES SAVED TO INBOX`, 'success');
-                } catch (err) {
-                    console.error("Failed to auto-save to inbox", err);
-                }
-            }
-        } catch (error) { console.error(error); addLog('FATAL ERROR IN PIPELINE.', 'error'); setStatus(SearchStatus.ERROR); }
+        // Use the real search pipeline from searchService
+        await runSearch(
+            activeQuery,
+            searchLocation || 'US',
+            user?.id || null,
+            addLog,
+            setStatus,
+            setResult,
+            setInfluencerCodes,
+            setGlitchStatus
+        );
     };
 
     // const handleCountrySelect = ... Removed
