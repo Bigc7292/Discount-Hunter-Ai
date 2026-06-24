@@ -1,20 +1,29 @@
+/**
+ * API Service — Frontend → Backend Verifier Communication
+ * Handles health checks and verification requests to the Node/Puppeteer backend.
+ */
+
 import type { CodeStatus } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_VERIFIER_API_URL || 'http://localhost:3001';
 
-interface VerifyCode {
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface VerifyCode {
   code: string;
   description: string;
   source?: string;
   sourceUrl?: string;
 }
 
-interface Merchant {
+export interface Merchant {
   name: string;
   url: string;
 }
 
-interface VerifyRequest {
+export interface VerifyRequest {
   merchant: Merchant;
   codes: VerifyCode[];
   testRegion: string;
@@ -29,6 +38,9 @@ export interface CodeVerificationResult {
   codeDescription?: string;
   source?: string;
   errorMessage?: string;
+  discountText?: string;
+  discountAmount?: string;
+  responseTime?: number;
 }
 
 export interface VerificationResponse {
@@ -41,12 +53,39 @@ export interface VerificationResponse {
   processingTimeMs: number;
 }
 
+// ---------------------------------------------------------------------------
+// Health check — always call this BEFORE starting a search
+// ---------------------------------------------------------------------------
+
+export async function checkVerifierHealth(): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout for health check
+
+    const response = await fetch(`${API_BASE_URL}/health`, {
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Verify codes — sends candidates to the Puppeteer backend for real testing
+// ---------------------------------------------------------------------------
+
 export async function verifyCodes(
   merchant: Merchant,
   codes: VerifyCode[],
   testRegion: string
 ): Promise<VerificationResponse | null> {
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120_000); // 2 min
+
     const response = await fetch(`${API_BASE_URL}/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -64,35 +103,41 @@ export async function verifyCodes(
         })),
         testRegion,
       }),
+      signal: controller.signal,
     });
 
+    clearTimeout(timeout);
+
     if (!response.ok) {
-      console.error(`Verifier error: ${response.status}`);
+      console.error(`Verifier error: HTTP ${response.status}`);
       return null;
     }
 
-    return await response.json();
+    return await response.json() as VerificationResponse;
+
   } catch (error) {
-    console.error('Verifier service unavailable:', error);
+    console.error('Verifier service error:', error);
     return null;
   }
 }
 
-export async function checkVerifierHealth(): Promise<boolean> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/health`);
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
+// ---------------------------------------------------------------------------
+// Get supported regions from backend
+// ---------------------------------------------------------------------------
 
 export async function getSupportedRegions(): Promise<string[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/regions`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch(`${API_BASE_URL}/regions`, {
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
     if (!response.ok) return [];
     const data = await response.json();
-    return data.regions || [];
+    return data.regions || data.map?.((r: { code: string }) => r.code) || [];
   } catch {
     return [];
   }

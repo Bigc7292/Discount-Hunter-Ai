@@ -1,3 +1,14 @@
+/**
+ * Backend Verifier — Express server
+ * Exposes POST /verify for real Puppeteer checkout testing.
+ *
+ * Fixes applied:
+ * - Removed duplicate /health route
+ * - Added processingTimeMs to /verify response
+ * - Added unverified count to /verify response
+ * - Proper CORS config
+ */
+
 import express from 'express';
 import cors from 'cors';
 import { z } from 'zod';
@@ -10,70 +21,109 @@ import 'dotenv/config';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
-app.use(express.json());
+// ── Middleware ──────────────────────────────────────────────────────────────
 
-app.get('/health', (_, res) => {
-  res.json({ 
-    status: 'healthy', 
-    timestamp: new Date().toISOString(),
-    regions: getAllSupportedRegions().map(r => r.code)
-  });
-});
+app.use(cors({
+  origin: '*', // Tighten this to your Vercel domain in production
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 
-app.get('/regions', (_, res) => {
-  res.json(getAllSupportedRegions());
-});
+app.use(express.json({ limit: '2mb' }));
+
+// ── Request schemas ─────────────────────────────────────────────────────────
 
 const verifyRequestSchema = z.object({
   merchant: z.object({
-    name: z.string(),
-    url: z.string(),
+    name: z.string().min(1),
+    url: z.string().url(),
     region: z.string().optional(),
   }),
   codes: z.array(z.object({
-    code: z.string(),
+    code: z.string().min(1).max(50),
     description: z.string(),
     source: z.string().optional(),
     sourceUrl: z.string().optional(),
-  })),
+  })).min(1).max(10), // Cap at 10 — prevents Puppeteer overload
   testRegion: z.string().default('US'),
 });
 
 const discoverRequestSchema = z.object({
-  query: z.string(),
+  query: z.string().min(1),
   region: z.string().default('GLOBAL'),
 });
 
-// Health check
-app.get('/health', (_, res) => {
-  res.json({ 
+// ── Routes ──────────────────────────────────────────────────────────────────
+
+// Health check (single definition)
+app.get('/health', (_req, res) => {
+  res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    regions: getAllSupportedRegions().map(r => r.code)
+    regions: getAllSupportedRegions().map(r => r.code),
+    version: '2.0.0',
   });
 });
 
-// Discovery endpoint - uses MiniMax to find codes
+// Supported regions list
+app.get('/regions', (_req, res) => {
+  res.json(getAllSupportedRegions());
+});
+
+// Discovery — real multi-source web discovery
 app.post('/discover', async (req, res) => {
   try {
     const { query, region } = discoverRequestSchema.parse(req.body);
-    
+
+    console.log(`[DISCOVER] Query: "${query}" | Region: ${region}`);
     const result = await discoverCodes(query, region);
-    
-    res.json(result);
+
+    // Map orchestrator output to the format frontend searchService.ts expects
+    const response = {
+      merchantName: result.storeName,
+      merchantUrl: `https://${result.domain}`,
+      suggestedCodes: result.candidates.map(c => ({
+        code: c.code,
+        description: c.discount
+          ? `${c.discount}${c.expiry ? ` — expires ${c.expiry}` : ''}`
+          : c.description || 'Discovered from live web sources',
+        source: c.source,
+        sourceUrl: c.sourceUrl,
+        discoveredAt: c.discoveredAt,
+        discoveryConfidence: c.confidence === 'high' ? 85
+          : c.confidence === 'medium' ? 60
+          : 35,
+        likelyRegion: c.likelyRegion,
+        regionDisplay: c.regionDisplay,
+      })),
+      competitors: [],
+      groundingUrls: [...new Set(result.candidates.map(c => c.sourceUrl).filter(Boolean))],
+      // Extra metadata for UI
+      meta: {
+        sourcesSearched: result.sourcesSearched,
+        totalTextsAnalysed: result.totalTextsAnalysed,
+        discoveryDurationMs: result.durationMs,
+      },
+    };
+
+    console.log(`[DISCOVER] Returning ${response.suggestedCodes.length} candidates to frontend`);
+    res.json(response);
+
   } catch (error) {
     console.error('Discovery error:', error);
     res.status(500).json({ error: 'Discovery failed', details: String(error) });
   }
 });
 
-// Verification endpoint - REAL testing with browser/proxies
+
+// Verify — REAL checkout testing with Puppeteer
 app.post('/verify', async (req, res) => {
+  const requestStart = Date.now();
+
   try {
     const body = verifyRequestSchema.parse(req.body);
     const { merchant, codes, testRegion } = body;
-    
+
     if (codes.length === 0) {
       return res.json({
         merchant,
@@ -82,69 +132,83 @@ app.post('/verify', async (req, res) => {
         successful: 0,
         failed: 0,
         unverified: 0,
+        processingTimeMs: Date.now() - requestStart,
       });
     }
 
     const geo = getGeoLocation(testRegion);
-    console.log(`Verifying ${codes.length} codes for ${merchant.name} from ${geo.country}`);
+    console.log(`[VERIFY] ${codes.length} codes for "${merchant.name}" | Region: ${geo.country}`);
 
-    // Transform to match internal types
     const request = {
-      merchant: { name: merchant.name, url: merchant.url, region: merchant.region || geo.country },
-      codes: codes.map(c => ({ 
-        ...c, 
-        source: c.source || 'Unknown',
-        sourceUrl: c.sourceUrl,
-        discoveredAt: new Date().toISOString() 
+      merchant: {
+        name: merchant.name,
+        url: merchant.url,
+        region: merchant.region || geo.country,
+      },
+      codes: codes.map(c => ({
+        code:        c.code,
+        description: c.description,
+        source:      c.source || 'Unknown',
+        sourceUrl:   c.sourceUrl,
+        discoveredAt: new Date().toISOString(),
       })),
-      testRegion
+      testRegion,
     };
 
     const result = await verifyCodes(request);
-    res.json(result);
+    const processingTimeMs = Date.now() - requestStart;
+
+    // Count statuses
+    const successful  = result.results.filter(r => r.status === 'verified').length;
+    const failed      = result.results.filter(r => r.status === 'failed' || r.status === 'expired').length;
+    const unverified  = result.results.filter(r => r.status === 'unverified' || r.status === 'error').length;
+
+    console.log(`[VERIFY] Done: ${successful} verified, ${failed} failed, ${unverified} unverified | ${processingTimeMs}ms`);
+
+    res.json({
+      ...result,
+      successful,
+      failed,
+      unverified,
+      processingTimeMs,
+    });
+
   } catch (error) {
-    console.error('Verification error:', error);
-    res.status(500).json({ error: 'Verification failed', details: String(error) });
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        error: 'Invalid request',
+        details: error.errors,
+      });
+    }
+    console.error('[VERIFY] Error:', error);
+    res.status(500).json({
+      error: 'Verification failed',
+      details: String(error),
+      processingTimeMs: Date.now() - requestStart,
+    });
   }
 });
 
-// Batch verification
-app.post('/verify-batch', async (req, res) => {
-  try {
-    const requests = verifyRequestSchema.array().parse(req.body);
-    
-    const results = await Promise.all(
-      requests.map(body => {
-        const geo = getGeoLocation(body.testRegion);
-        const request = {
-          merchant: { name: body.merchant.name, url: body.merchant.url, region: body.merchant.region || geo.country },
-          codes: body.codes.map(c => ({ 
-            ...c, 
-            source: c.source || 'Unknown',
-            sourceUrl: c.sourceUrl,
-            discoveredAt: new Date().toISOString() 
-          })),
-          testRegion: body.testRegion
-        };
-        return verifyCodes(request);
-      })
-    );
-    res.json({ results });
-  } catch (error) {
-    console.error('Batch verification error:', error);
-    res.status(500).json({ error: 'Batch verification failed', details: String(error) });
-  }
-});
+// ── Graceful shutdown ───────────────────────────────────────────────────────
 
-// Cleanup on shutdown
-process.on('SIGINT', async () => {
-  console.log('Cleaning up...');
+async function shutdown() {
+  console.log('\n[SERVER] Shutting down — cleaning up browser instances...');
   await cleanup();
+  console.log('[SERVER] Clean shutdown complete.');
   process.exit(0);
-});
+}
+
+process.on('SIGINT',  shutdown);
+process.on('SIGTERM', shutdown);
+
+// ── Start ───────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`🚀 Discount Hunter Verifier running on port ${PORT}`);
-  console.log(`   Health: http://localhost:${PORT}/health`);
+  console.log(`\n🚀 Discount Hunter Verifier v2.0.0`);
+  console.log(`   Port:    ${PORT}`);
+  console.log(`   Health:  http://localhost:${PORT}/health`);
   console.log(`   Regions: http://localhost:${PORT}/regions`);
+  console.log(`   Headless: ${process.env.USE_HEADLESS_BROWSER !== 'false'}`);
+  console.log(`   Proxy:   ${process.env.RESIDENTIAL_PROXY_API_KEY ? 'CONFIGURED' : 'NOT SET (geo-testing disabled)'}`);
+  console.log('');
 });

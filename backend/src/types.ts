@@ -22,7 +22,8 @@ export interface CodeVerificationResult {
   code: string;
   status: 'verified' | 'failed' | 'expired' | 'error' | 'unverified';
   confidence: number;
-  discountApplied?: string;
+  discountText?: string;    // Raw text detected at checkout e.g. "SAVE20 applied"
+  discountAmount?: string;  // Extracted amount e.g. "$12.50" or "20% off"
   errorMessage?: string;
   testedAt: string;
   testRegion: string;
@@ -61,6 +62,8 @@ export interface BrowserTestResult {
   finalPrice?: string;
   originalPrice?: string;
   discountText?: string;
+  discountAmount?: string;
+  discountDetected?: boolean;
   errorMessage?: string;
   pageLoadTime: number;
 }

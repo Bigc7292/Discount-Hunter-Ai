@@ -1,213 +1,258 @@
-import type { 
-  CandidateCode, 
-  MerchantInfo, 
+/**
+ * Verifier — Orchestrates real checkout testing for each candidate code
+ *
+ * Improvements:
+ * - Strict confidence gate: browserTestPassed MUST be true for 'verified' status
+ * - discountText and discountAmount passed through to response
+ * - Per-code 35s timeout (from browserBot)
+ * - Overall batch timeout: 3 minutes max for all codes
+ * - Better confidence scoring with real factors
+ */
+
+import type {
+  CandidateCode,
+  MerchantInfo,
   VerificationRequest,
   VerificationResponse,
-  CodeVerificationResult 
+  CodeVerificationResult
 } from './types.js';
-import { getGeoLocation, formatProxyUrl } from './geoProxy.js';
+import { getGeoLocation } from './geoProxy.js';
 import { simulateCheckout } from './browserBot.js';
+
+// Maximum time to verify ALL codes in a batch
+const BATCH_TIMEOUT_MS = 180_000; // 3 minutes
+
+// ---------------------------------------------------------------------------
+// Confidence scoring
+// ---------------------------------------------------------------------------
 
 interface ConfidenceFactors {
   browserTestPassed: boolean;
+  discountDetected: boolean;
+  discountAmount?: string;
   responseTime: number;
   testRegion: string;
-  attempts: number;
   errorMessage?: string;
 }
 
 function calculateConfidence(factors: ConfidenceFactors): number {
-  let confidence = 0;
+  // RULE: If the browser test failed, confidence can NEVER be >= 85
+  // (the threshold for 'verified' status). This is the core integrity gate.
+  if (!factors.browserTestPassed) {
+    let base = 20;
 
-  if (factors.browserTestPassed) {
-    confidence += 60;
-  }
-
-  if (factors.responseTime < 5000) {
-    confidence += 15;
-  } else if (factors.responseTime < 10000) {
-    confidence += 10;
-  } else if (factors.responseTime < 20000) {
-    confidence += 5;
-  }
-
-  if (factors.attempts > 1) {
-    confidence += 10;
-  }
-
-  if (factors.testRegion !== 'GLOBAL') {
-    confidence += 5;
-  }
-
-  if (factors.errorMessage) {
-    const error = factors.errorMessage.toLowerCase();
-    if (error.includes('expired')) {
-      confidence -= 30;
-    } else if (error.includes('invalid')) {
-      confidence -= 40;
-    } else if (error.includes('minimum')) {
-      confidence -= 20;
-    } else if (error.includes('not applicable')) {
-      confidence -= 25;
+    // Reduce further based on error type
+    if (factors.errorMessage) {
+      const err = factors.errorMessage.toLowerCase();
+      if (err.includes('expired'))    base = 5;
+      if (err.includes('invalid'))    base = 5;
+      if (err.includes('not found'))  base = 10;
+      if (err.includes('timeout'))    base = 15;
     }
+
+    return Math.max(0, base);
   }
 
-  return Math.max(0, Math.min(100, confidence));
+  // Browser test passed — build confidence up
+  let confidence = 60; // Base for a passed browser test
+
+  // Actual discount was detected in the page (strongest signal)
+  if (factors.discountDetected) confidence += 20;
+
+  // A specific dollar/percent amount was extracted
+  if (factors.discountAmount) confidence += 10;
+
+  // Response time bonus (faster = store responded cleanly)
+  if (factors.responseTime < 5000)       confidence += 5;
+  else if (factors.responseTime < 10000) confidence += 3;
+
+  // Non-global region test is more reliable
+  if (factors.testRegion !== 'GLOBAL') confidence += 5;
+
+  return Math.min(100, confidence);
 }
+
+// ---------------------------------------------------------------------------
+// Status determination — strict rules
+// ---------------------------------------------------------------------------
 
 function determineStatus(
-  success: boolean, 
-  confidence: number, 
+  browserTestPassed: boolean,
+  confidence: number,
   errorMessage?: string
 ): CodeVerificationResult['status'] {
-  if (!success) {
+  // Failed at checkout
+  if (!browserTestPassed) {
     if (errorMessage) {
-      const error = errorMessage.toLowerCase();
-      if (error.includes('expired')) return 'expired';
-      if (error.includes('invalid') || error.includes('rejected')) return 'failed';
+      const err = errorMessage.toLowerCase();
+      if (err.includes('expired'))  return 'expired';
+      if (err.includes('invalid') || err.includes('not valid') || err.includes('not found')) return 'failed';
+      if (err.includes('timeout') || err.includes('could not locate')) return 'error';
     }
-    return 'error';
+    return 'failed';
   }
 
-  if (confidence < 30) return 'unverified';
+  // Passed browser test — MUST meet confidence threshold
+  // 85+ = verified (real savings detected at checkout)
   if (confidence >= 85) return 'verified';
-  
+
+  // Passed but not enough confidence signals
   return 'unverified';
 }
+
+// ---------------------------------------------------------------------------
+// Verify a single code
+// ---------------------------------------------------------------------------
 
 async function verifySingleCode(
   merchant: MerchantInfo,
   candidate: CandidateCode,
-  region: string,
-  maxRetries: number = 1
+  region: string
 ): Promise<CodeVerificationResult> {
   const geo = getGeoLocation(region);
-  const proxy = geo.proxy;
-  let lastError: string | undefined;
+
+  console.log(`  Testing: ${candidate.code}`);
+
   let success = false;
   let responseTime = 0;
-  let discountApplied: string | undefined;
+  let lastError: string | undefined;
+  let discountText: string | undefined;
+  let discountAmount: string | undefined;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const result = await simulateCheckout(
-        merchant.url,
-        candidate.code,
-        proxy,
-        30000
-      );
+  try {
+    const result = await simulateCheckout(
+      merchant.url,
+      candidate.code,
+      geo.proxy,
+      35000 // 35s per code
+    );
 
-      responseTime = result.pageLoadTime;
-      discountApplied = result.discountText;
+    success        = result.success;
+    responseTime   = result.pageLoadTime || 0;
+    lastError      = result.errorMessage;
+    discountText   = result.discountText;
+    discountAmount = result.discountAmount;
 
-      if (result.success) {
-        success = true;
-        break;
-      }
-
-      if (result.errorMessage) {
-        lastError = result.errorMessage;
-        
-        if (lastError.toLowerCase().includes('could not find')) {
-          break;
-        }
-      }
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : 'Verification failed';
-      
-      if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-      }
-    }
+  } catch (error) {
+    lastError = error instanceof Error ? error.message : 'Simulation failed';
+    console.warn(`  ✗ ${candidate.code}: ${lastError}`);
   }
 
-  const confidenceFactors: ConfidenceFactors = {
-    browserTestPassed: success,
+  const confidence = calculateConfidence({
+    browserTestPassed:  success,
+    discountDetected:   !!(discountText || discountAmount),
+    discountAmount,
     responseTime,
-    testRegion: region,
-    attempts: maxRetries + 1,
-    errorMessage: lastError
-  };
+    testRegion:         region,
+    errorMessage:       lastError,
+  });
 
-  const confidence = calculateConfidence(confidenceFactors);
   const status = determineStatus(success, confidence, lastError);
 
+  console.log(`  ${status === 'verified' ? '✓' : '✗'} ${candidate.code}: ${status} (confidence: ${confidence}%)`);
+
   return {
-    code: candidate.code,
+    code:           candidate.code,
     status,
     confidence,
-    discountApplied,
-    errorMessage: lastError,
-    testedAt: new Date().toISOString(),
-    testRegion: region,
+    discountText,
+    discountAmount,
+    errorMessage:   lastError,
+    testedAt:       new Date().toISOString(),
+    testRegion:     region,
     responseTime,
-    terms: extractTerms(candidate.description)
+    terms:          extractTerms(candidate.description),
   };
 }
 
+// ---------------------------------------------------------------------------
+// Verify all codes in a batch with overall timeout
+// ---------------------------------------------------------------------------
+
+export async function verifyCodes(request: VerificationRequest): Promise<VerificationResponse> {
+  const { merchant, codes, testRegion } = request;
+
+  console.log(`\n[Verifier] Starting: ${codes.length} codes for "${merchant.name}" (${testRegion})`);
+
+  const results: CodeVerificationResult[] = [];
+  const batchDeadline = Date.now() + BATCH_TIMEOUT_MS;
+
+  for (const candidate of codes) {
+    // Check if we've exceeded the batch time limit
+    if (Date.now() > batchDeadline) {
+      console.warn('[Verifier] Batch timeout reached — stopping early');
+      // Mark remaining codes as error
+      const remaining = codes.slice(results.length);
+      for (const c of remaining) {
+        results.push({
+          code: c.code,
+          status: 'error',
+          confidence: 0,
+          errorMessage: 'Verification timeout — batch took too long',
+          testedAt: new Date().toISOString(),
+          testRegion,
+          responseTime: 0,
+          terms: [],
+        });
+      }
+      break;
+    }
+
+    const result = await verifySingleCode(merchant, candidate, testRegion);
+    results.push(result);
+
+    // Small pause between codes (be a respectful bot)
+    if (results.length < codes.length) {
+      await new Promise(r => setTimeout(r, Math.floor(Math.random() * 1000) + 500));
+    }
+  }
+
+  const successful  = results.filter(r => r.status === 'verified').length;
+  const failed      = results.filter(r => r.status === 'failed' || r.status === 'expired').length;
+  const unverified  = results.filter(r => r.status === 'unverified' || r.status === 'error').length;
+
+  console.log(`[Verifier] Complete: ${successful} verified, ${failed} failed, ${unverified} unverified\n`);
+
+  return {
+    merchant,
+    results,
+    totalTested: results.length,
+    successful,
+    failed,
+    testedAt: new Date().toISOString(),
+    region: testRegion,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Extract T&C snippets from description text
+// ---------------------------------------------------------------------------
+
 function extractTerms(description: string): string[] {
   const terms: string[] = [];
-  
-  const minSpend = description.match(/min\.?\s*spend.*?\$?\d+/i);
-  if (minSpend) terms.push(minSpend[0]);
-  
-  const percentMatch = description.match(/\d+\s*%/);
-  if (percentMatch) terms.push(`Save ${percentMatch[0]}`);
-  
-  const expiryMatch = description.match(/exp(?:ires?|iry).*?\d+/i);
-  if (expiryMatch) terms.push(expiryMatch[0]);
-  
+  if (!description) return terms;
+
+  const minSpend = description.match(/min\.?\s*(?:spend|order|purchase).*?\$?[\d]+/i);
+  if (minSpend) terms.push(minSpend[0].trim());
+
+  const percentMatch = description.match(/\d+\s*%\s*off/i);
+  if (percentMatch) terms.push(percentMatch[0]);
+
+  const expiryMatch = description.match(/exp(?:ires?|iry)[^.]{0,30}/i);
+  if (expiryMatch) terms.push(expiryMatch[0].trim());
+
   const newCustomer = description.match(/new\s*custom(?:er|ers?)/i);
   if (newCustomer) terms.push('New customers only');
+
+  const firstOrder = description.match(/first\s*(?:order|purchase)/i);
+  if (firstOrder) terms.push('First order only');
 
   return terms;
 }
 
-export async function verifyCodes(
-  request: VerificationRequest
-): Promise<VerificationResponse> {
-  const { merchant, codes, testRegion } = request;
-  
-  console.log(`Starting verification for ${merchant.name} in ${testRegion} region`);
-  console.log(`Testing ${codes.length} candidate codes`);
-
-  const results: CodeVerificationResult[] = [];
-  let successful = 0;
-  let failed = 0;
-
-  for (const candidate of codes) {
-    console.log(`Verifying code: ${candidate.code}`);
-    
-    const result = await verifySingleCode(merchant, candidate, testRegion);
-    results.push(result);
-
-    if (result.status === 'verified') {
-      successful++;
-      console.log(`✓ Code ${candidate.code} VERIFIED (confidence: ${result.confidence}%)`);
-    } else if (result.status === 'failed' || result.status === 'expired') {
-      failed++;
-      console.log(`✗ Code ${candidate.code} ${result.status}`);
-    } else {
-      console.log(`? Code ${candidate.code} unverified (confidence: ${result.confidence}%)`);
-    }
-
-    await new Promise(r => setTimeout(r, 500));
-  }
-
-  const response: VerificationResponse = {
-    merchant,
-    results,
-    totalTested: codes.length,
-    successful,
-    failed,
-    testedAt: new Date().toISOString(),
-    region: testRegion
-  };
-
-  console.log(`\nVerification complete: ${successful}/${codes.length} successful`);
-
-  return response;
-}
+// ---------------------------------------------------------------------------
+// Public single-code verification (for direct API access)
+// ---------------------------------------------------------------------------
 
 export async function verifySingleCodePublic(
   merchantUrl: string,
@@ -215,17 +260,15 @@ export async function verifySingleCodePublic(
   region: string = 'US'
 ): Promise<CodeVerificationResult> {
   const merchant: MerchantInfo = {
-    name: new URL(merchantUrl).hostname,
+    name: new URL(merchantUrl).hostname.replace('www.', ''),
     url: merchantUrl,
-    region
+    region,
   };
-
   const candidate: CandidateCode = {
     code,
-    description: 'Direct verification request',
+    description: 'Direct API verification',
     source: 'API',
-    discoveredAt: new Date().toISOString()
+    discoveredAt: new Date().toISOString(),
   };
-
   return verifySingleCode(merchant, candidate, region);
 }

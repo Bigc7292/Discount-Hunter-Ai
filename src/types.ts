@@ -2,10 +2,12 @@
 export enum SearchStatus {
   IDLE = 'IDLE',
   PLANNING = 'PLANNING',
+  SCANNING = 'SCANNING',
   DISCOVERING = 'DISCOVERING',
   VERIFYING = 'VERIFYING',
   COMPLETE = 'COMPLETE',
-  ERROR = 'ERROR'
+  ERROR = 'ERROR',
+  VERIFIER_OFFLINE = 'VERIFIER_OFFLINE',
 }
 
 export type CodeStatus = 'verified' | 'failed' | 'expired' | 'error' | 'unverified';
@@ -13,14 +15,19 @@ export type CodeStatus = 'verified' | 'failed' | 'expired' | 'error' | 'unverifi
 export interface CouponCode {
   code: string;
   description: string;
-  discountAmount?: string;
-  successRate: number;
-  lastVerified: string;
-  source: string;
-  isVerified: boolean;
-  status?: CodeStatus;
-  testedRegion?: string;
-  errorMessage?: string;
+  discountAmount?: string;    // Actual saving detected at checkout e.g. "$12.50"
+  discountText?: string;      // Raw text from checkout page e.g. "10% off applied"
+  successRate: number;        // Confidence score 0-100
+  lastVerified: string;       // ISO date or human-readable
+  source: string;             // Where code was found
+  isVerified: boolean;        // Must be true for checkout-confirmed codes
+  status: CodeStatus;         // Required — no longer optional
+  testedRegion?: string;      // Region where checkout was simulated
+  testedAt?: string;          // ISO timestamp of when checkout was run
+  errorMessage?: string;      // Error detail if code failed at checkout
+  responseTime?: number;      // Milliseconds the checkout simulation took
+  likelyRegion?: string;      // ISO code of where code is likely valid e.g. 'AE', 'GB', 'GLOBAL'
+  regionDisplay?: string;     // Human-readable e.g. '🇦🇪 UAE' or '🌍 Global'
 }
 
 export interface Competitor {
@@ -33,11 +40,15 @@ export interface SearchResult {
   merchantName: string;
   merchantUrl: string;
   logoUrl?: string;
-  codes: CouponCode[];
+  codes: CouponCode[];          // ONLY verified codes — guaranteed by searchService
+  unverifiedCount?: number;     // How many codes were discovered but FAILED verification
   competitors: Competitor[];
+  verifierOnline: boolean;      // Was the backend verifier reachable during this search?
   stats: {
     sourcesScanned: number;
-    codesTested: number;
+    codesDiscovered: number;    // Total candidates from AI discovery
+    codesTested: number;        // How many went through checkout simulation
+    codesVerified: number;      // How many PASSED checkout (matches codes.length)
     timeTaken: string;
     moneySavedEstimate: string;
   };
@@ -62,6 +73,8 @@ export interface InboxItem {
   successRate?: number;
   isVerified?: boolean;
   status?: CodeStatus;
+  discountAmount?: string;
+  testedRegion?: string;
 }
 
 export interface HistoryEntry {
@@ -70,6 +83,7 @@ export interface HistoryEntry {
   timestamp: string;
   resultCount: number;
   merchant: string;
+  verifiedCount?: number;
 }
 
 export interface User {

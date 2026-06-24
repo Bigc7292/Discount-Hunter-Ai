@@ -2,18 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================
+   CSS Custom Properties
+   ============================================================ */
+
 :root {
-    --hunter-bg: #020205;
-    --hunter-surface: #0a0a0f;
-    --hunter-border: rgba(0, 240, 255, 0.15);
-    --hunter-cyan: #00f0ff;
-    --hunter-purple: #9d00ff;
-    --hunter-green: #0aff00;
-    --hunter-muted: #666666;
-    --hunter-text: #ffffff;
-    --neon-glow-cyan: 0 0 10px rgba(0, 240, 255, 0.5), 0 0 20px rgba(0, 240, 255, 0.3);
+    --hunter-bg:        #020205;
+    --hunter-surface:   #0a0a0f;
+    --hunter-border:    rgba(0, 240, 255, 0.15);
+    --hunter-cyan:      #00f0ff;
+    --hunter-purple:    #9d00ff;
+    --hunter-green:     #0aff00;
+    --hunter-muted:     #666666;
+    --hunter-text:      #ffffff;
+    --neon-glow-cyan:   0 0 10px rgba(0, 240, 255, 0.5), 0 0 20px rgba(0, 240, 255, 0.3);
     --neon-glow-purple: 0 0 10px rgba(157, 0, 255, 0.5), 0 0 20px rgba(157, 0, 255, 0.3);
+    --neon-glow-green:  0 0 10px rgba(10, 255, 0, 0.5), 0 0 20px rgba(10, 255, 0, 0.3);
 }
+
+/* ============================================================
+   Base
+   ============================================================ */
 
 body {
     background-color: var(--hunter-bg);
@@ -23,108 +32,143 @@ body {
     cursor: none;
 }
 
+/* ============================================================
+   Cyber Grid Background
+   ============================================================ */
+
+.bg-cyber-grid,
 .cyber-grid {
     background-size: 40px 40px;
     background-image:
-        linear-gradient(to right, rgba(0, 240, 255, 0.05) 1px, transparent 1px),
+        linear-gradient(to right,  rgba(0, 240, 255, 0.05) 1px, transparent 1px),
         linear-gradient(to bottom, rgba(0, 240, 255, 0.05) 1px, transparent 1px);
     z-index: 0;
 }
+
+/* ============================================================
+   Glassmorphism
+   ============================================================ */
 
 .cyber-glass {
     background: rgba(10, 10, 15, 0.8);
     backdrop-filter: blur(12px);
     border: 1px solid var(--hunter-border);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    border-radius: 0.75rem;
 }
 
-.neon-border-cyan {
-    border: 1px solid var(--hunter-cyan);
-    box-shadow: var(--neon-glow-cyan);
-}
+/* ============================================================
+   Neon Utilities
+   ============================================================ */
 
-.neon-text-cyan {
-    color: var(--hunter-cyan);
-    text-shadow: var(--neon-glow-cyan);
-}
+.neon-border-cyan { border: 1px solid var(--hunter-cyan); box-shadow: var(--neon-glow-cyan); }
+.neon-text-cyan   { color: var(--hunter-cyan); text-shadow: var(--neon-glow-cyan); }
+.box-glow         { box-shadow: var(--neon-glow-cyan); }
 
-/* Animation Utilities */
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
+/* ============================================================
+   Scrollbar
+   ============================================================ */
 
-    to {
-        opacity: 1;
-    }
-}
-
-@keyframes slideUp {
-    from {
-        transform: translateY(20px);
-        opacity: 0;
-    }
-
-    to {
-        transform: translateY(0);
-        opacity: 1;
-    }
-}
-
-@keyframes slideRight {
-    from {
-        transform: translateX(20px);
-        opacity: 0;
-    }
-
-    to {
-        transform: translateX(0);
-        opacity: 1;
-    }
-}
-
-.animate-in {
-    animation-duration: 0.5s;
-    animation-fill-mode: both;
-    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.fade-in {
-    animation-name: fadeIn;
-}
-
-.slide-in-from-bottom-8 {
-    animation-name: slideUp;
-}
-
-.animate-spin-slow {
-    animation: spin 3s linear infinite;
-}
-
-@keyframes spin {
-    from {
-        transform: rotate(0deg);
-    }
-
-    to {
-        transform: rotate(360deg);
-    }
-}
-
+.custom-scrollbar::-webkit-scrollbar,
 ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track,
+::-webkit-scrollbar-track  { background: #020205; }
+.custom-scrollbar::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb  { background: #1a1a2e; border-radius: 3px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:hover { background: var(--hunter-cyan); }
+
+/* ============================================================
+   Keyframe Animations
+   ============================================================ */
+
+/* Fade in */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
 }
 
-::-webkit-scrollbar-track {
-    background: #020205;
+/* Slide up */
+@keyframes slideUp {
+    from { transform: translateY(20px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
 }
 
-::-webkit-scrollbar-thumb {
-    background: #333;
-    border-radius: 3px;
+/* Slide in from right */
+@keyframes slideInFromRight {
+    from { transform: translateX(20px); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
 }
 
-::-webkit-scrollbar-thumb:hover {
-    background: #00d2ff;
+/* Slide in from bottom (4 = ~16px) */
+@keyframes slideInFromBottom4 {
+    from { transform: translateY(16px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* Slide in from bottom (8 = ~32px) */
+@keyframes slideInFromBottom8 {
+    from { transform: translateY(32px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* Spin */
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+/* Slow spin */
+@keyframes spinSlow {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+/* Marquee — scrolling ticker */
+@keyframes marquee {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-33.333%); }
+}
+
+/* Shimmer — button shine effect */
+@keyframes shimmer {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+}
+
+/* Pulse glow */
+@keyframes pulseGlow {
+    0%, 100% { box-shadow: 0 0 8px rgba(0, 240, 255, 0.3); }
+    50%       { box-shadow: 0 0 24px rgba(0, 240, 255, 0.8), 0 0 48px rgba(0, 240, 255, 0.4); }
+}
+
+/* ============================================================
+   Animation Utility Classes
+   ============================================================ */
+
+.animate-in                   { animation-fill-mode: both; animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+.fade-in                      { animation-name: fadeIn; animation-duration: 0.5s; }
+.slide-in-from-bottom-4       { animation-name: slideInFromBottom4; animation-duration: 0.5s; }
+.slide-in-from-bottom-8       { animation-name: slideInFromBottom8; animation-duration: 0.5s; }
+.slide-in-from-right          { animation-name: slideInFromRight; animation-duration: 0.3s; }
+
+.duration-300  { animation-duration: 0.3s; }
+.duration-500  { animation-duration: 0.5s; }
+.duration-700  { animation-duration: 0.7s; }
+
+.animate-spin      { animation: spin 1s linear infinite; }
+.animate-spin-slow { animation: spinSlow 3s linear infinite; }
+.animate-marquee   { animation: marquee 28s linear infinite; }
+.animate-shimmer   { animation: shimmer 1.5s ease-in-out infinite; }
+.animate-pulse-glow { animation: pulseGlow 2s ease-in-out infinite; }
+
+/* ============================================================
+   Tailwind hover:bg-hunter-cyan/8 (not auto-generated)
+   ============================================================ */
+
+.hover\:bg-hunter-cyan\/8:hover {
+    background-color: rgba(0, 240, 255, 0.08);
 }

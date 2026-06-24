@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Loader2, Zap, ArrowRight, Lock, Database, LogIn, Crown, ShieldAlert, Frown, ExternalLink, Globe, ChevronDown, Check, Sparkles, Timer, Bell, Download, Plane, Shirt, Laptop, Pizza, Briefcase, MapPin, Sun, Moon, Crosshair, Target, ChevronRight, ArrowLeft } from 'lucide-react';
+import { LogIn, Sun, Moon, Bell, Check, Sparkles, ArrowRight, Laptop, Shirt, Plane, Pizza, Briefcase, Search, Loader2, Zap, Lock, Database, Crown, ShieldAlert, Frown, ExternalLink, Globe, ChevronDown, Timer, Download, MapPin, Crosshair, Target, ChevronRight, ArrowLeft } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
@@ -9,6 +9,7 @@ import { doc, getDoc, collection, addDoc, query as firestoreQuery, onSnapshot, o
 
 import { SearchStatus, SearchResult, LogEntry, User, CouponCode, InboxItem, HistoryEntry } from './types';
 import { runSearch } from './services/searchService';
+// nvidiaService is used internally by searchService — no direct import needed here
 import { subscribeToRecentSavings, formatSavingForTicker, RecentSaving } from './services/recentSavingsService';
 import TerminalLog from './components/TerminalLog';
 import ResultCard from './components/ResultCard';
@@ -274,6 +275,9 @@ export default function App() {
                         logs={logs}
                         result={result}
                         activeTab={activeTab}
+                        onSaveCode={handleSaveCode}
+                        influencerCodes={influencerCodes}
+                        glitchStatus={glitchStatus}
                     />
 
                     {/* Dashboard overlays (Portals) */}
