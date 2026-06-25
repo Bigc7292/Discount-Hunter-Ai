@@ -182,6 +182,35 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
         )}
       </div>
 
+      {/* ── Unverified / Untested Candidates ── */}
+      {result.unverifiedCodes && result.unverifiedCodes.length > 0 && (
+        <div className="space-y-4 pt-4">
+          <div className="flex items-center gap-3">
+            <div className="h-px flex-1 bg-hunter-border/30" />
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={12} className="text-hunter-muted" />
+              <span className="text-[10px] text-hunter-muted font-mono uppercase tracking-[0.4em]">
+                Unverified Candidates ({result.unverifiedCodes.length})
+              </span>
+            </div>
+            <div className="h-px flex-1 bg-hunter-border/30" />
+          </div>
+          <p className="text-center text-[10px] text-hunter-muted/60 font-mono">
+            These candidates were discovered on live forums/coupon sites but failed validation or could not be tested (e.g. login wall).
+          </p>
+          <div className="grid gap-4 opacity-75">
+            {result.unverifiedCodes.map((code, idx) => (
+              <ResultCard
+                key={`unver-${code.code}-${idx}`}
+                code={code}
+                rank={idx + 100}
+                onSave={onSaveCode}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Influencer / Social codes — clearly unverified ── */}
       {influencerCodes.length > 0 && (
         <div className="space-y-4 pt-4">

@@ -242,22 +242,65 @@ export async function runSearch(
     const allResults = verificationResponse.results || [];
     const verifiedCodes: CouponCode[] = allResults
       .filter(r => r.status === 'verified')
-      .map(r => ({
-        code: r.code,
-        description: r.codeDescription || toVerify.find(c => c.code === r.code)?.description || '',
-        successRate: r.confidence,
-        lastVerified: r.testedAt
-          ? new Date(r.testedAt).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })
-          : 'Just now',
-        source: r.source || 'AI Discovery',
-        isVerified: true,
-        status: 'verified' as const,
-        testedRegion: r.testedRegion,
-        testedAt: r.testedAt,
-        discountText: r.discountText,
-        discountAmount: r.discountAmount,
-        responseTime: r.responseTime,
+      .map(r => {
+        const discCand = toVerify.find(c => c.code === r.code);
+        return {
+          code: r.code,
+          description: r.codeDescription || discCand?.description || '',
+          successRate: r.confidence,
+          lastVerified: r.testedAt
+            ? new Date(r.testedAt).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })
+            : 'Just now',
+          source: r.source || 'AI Discovery',
+          isVerified: true,
+          status: 'verified' as const,
+          testedRegion: r.testedRegion,
+          testedAt: r.testedAt,
+          discountText: r.discountText,
+          discountAmount: r.discountAmount,
+          responseTime: r.responseTime,
+          likelyRegion: discCand?.likelyRegion,
+          regionDisplay: discCand?.regionDisplay,
+        };
+      });
+
+    // Map codes that failed verification or couldn't be tested (e.g. error / expired)
+    const unverifiedCodes: CouponCode[] = allResults
+      .filter(r => r.status !== 'verified')
+      .map(r => {
+        const discCand = toVerify.find(c => c.code === r.code);
+        return {
+          code: r.code,
+          description: r.codeDescription || discCand?.description || 'Discovered from live web sources',
+          successRate: r.confidence || 20,
+          lastVerified: 'Recently tested',
+          source: r.source || discCand?.source || 'AI Discovery',
+          isVerified: false,
+          status: r.status,
+          testedRegion: r.testedRegion,
+          testedAt: r.testedAt,
+          errorMessage: r.errorMessage || 'Failed at checkout',
+          likelyRegion: discCand?.likelyRegion,
+          regionDisplay: discCand?.regionDisplay,
+        };
+      });
+
+    // Map remaining discovered codes that were not tested (due to batch limits)
+    const untestedCodes: CouponCode[] = discovered
+      .slice(toVerify.length)
+      .map(c => ({
+        code: c.code,
+        description: c.description || 'Discovered from live web sources',
+        successRate: c.discoveryConfidence || 35,
+        lastVerified: 'Discovered',
+        source: c.source || 'AI Discovery',
+        isVerified: false,
+        status: 'unverified' as const,
+        likelyRegion: c.likelyRegion,
+        regionDisplay: c.regionDisplay,
       }));
+
+    const mergedUnverified = [...unverifiedCodes, ...untestedCodes];
 
     const failedCount = allResults.filter(r =>
       r.status === 'failed' || r.status === 'expired' || r.status === 'error'
@@ -272,7 +315,11 @@ export async function runSearch(
     );
 
     if (failedCount > 0) {
-      addLog(`${failedCount} CODE${failedCount !== 1 ? 'S' : ''} REJECTED AT CHECKOUT — NOT SHOWN`, 'info');
+      addLog(`${failedCount} CODE${failedCount !== 1 ? 'S' : ''} REJECTED AT CHECKOUT`, 'info');
+    }
+
+    if (untestedCodes.length > 0) {
+      addLog(`${untestedCodes.length} DISCOVERED CODE${untestedCodes.length !== 1 ? 'S' : ''} NOT TESTED (CAPPED)`, 'info');
     }
 
     // Estimated savings from actual discount amounts detected
@@ -294,7 +341,8 @@ export async function runSearch(
       merchantName: discovery.merchantName,
       merchantUrl: discovery.merchantUrl,
       codes: verifiedCodes,
-      unverifiedCount: failedCount + unverifiedCount,
+      unverifiedCodes: mergedUnverified,
+      unverifiedCount: failedCount + unverifiedCount + untestedCodes.length,
       competitors: discovery.competitors,
       verifierOnline: true,
       stats: {

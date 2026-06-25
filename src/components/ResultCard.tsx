@@ -169,6 +169,12 @@ const ResultCard: React.FC<ResultCardProps> = ({ code, rank, onSave }) => {
                 Tested in {code.testedRegion}
               </div>
             )}
+            {code.regionDisplay && (
+              <div className="flex items-center gap-1 text-hunter-cyan/70">
+                <Globe size={11} />
+                Region: {code.regionDisplay}
+              </div>
+            )}
             {code.responseTime && isVerified && (
               <div className="flex items-center gap-1 text-hunter-muted/50">
                 <Timer size={11} />
@@ -191,10 +197,10 @@ const ResultCard: React.FC<ResultCardProps> = ({ code, rank, onSave }) => {
             </span>
           </div>
 
-          {/* Error detail for failed codes */}
-          {isFailed && code.errorMessage && (
-            <div className="flex items-center gap-1.5 text-[10px] text-red-400/70 font-mono">
-              <XCircle size={10} />
+          {/* Error detail for failed or unverified codes */}
+          {(isFailed || isUnverified) && code.errorMessage && (
+            <div className={`flex items-center gap-1.5 text-[10px] font-mono ${isFailed ? 'text-red-400/70' : 'text-yellow-400/70'}`}>
+              {isFailed ? <XCircle size={10} /> : <AlertTriangle size={10} />}
               {code.errorMessage}
             </div>
           )}

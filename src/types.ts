@@ -41,6 +41,7 @@ export interface SearchResult {
   merchantUrl: string;
   logoUrl?: string;
   codes: CouponCode[];          // ONLY verified codes — guaranteed by searchService
+  unverifiedCodes?: CouponCode[]; // Codes that failed or couldn't be tested (e.g. login wall)
   unverifiedCount?: number;     // How many codes were discovered but FAILED verification
   competitors: Competitor[];
   verifierOnline: boolean;      // Was the backend verifier reachable during this search?
