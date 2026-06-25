@@ -142,3 +142,61 @@ export async function getSupportedRegions(): Promise<string[]> {
     return [];
   }
 }
+
+// ---------------------------------------------------------------------------
+// Discover codes — calls the Express backend's multi-source discovery pipeline
+// ---------------------------------------------------------------------------
+
+export interface DiscoveredCode {
+  code: string;
+  description: string;
+  source: string;
+  sourceUrl?: string;
+  discoveredAt: string;
+  discoveryConfidence: number;
+  likelyRegion?: string;
+  regionDisplay?: string;
+}
+
+export interface DiscoveryResponse {
+  merchantName: string;
+  merchantUrl: string;
+  suggestedCodes: DiscoveredCode[];
+  competitors: any[];
+  groundingUrls: string[];
+  meta?: {
+    sourcesSearched: string[];
+    totalTextsAnalysed: number;
+    discoveryDurationMs: number;
+  };
+}
+
+export async function discoverCodes(
+  query: string,
+  region: string
+): Promise<DiscoveryResponse> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000); // 60s timeout for backend discovery
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/discover`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, region }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      throw new Error(`Discovery backend error: HTTP ${response.status}`);
+    }
+
+    return await response.json() as DiscoveryResponse;
+  } catch (error) {
+    clearTimeout(timeout);
+    console.error('Discovery service error:', error);
+    throw error;
+  }
+}
+

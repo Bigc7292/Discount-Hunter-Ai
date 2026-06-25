@@ -10,8 +10,8 @@
  */
 
 import { CouponCode, SearchResult, SearchStatus, LogEntry } from '../types';
-import { discoverCodes, findInfluencerCodes, checkGlitchProbability, generateLogMessage } from './nvidiaService';
-import { checkVerifierHealth } from './apiService';
+import { findInfluencerCodes, checkGlitchProbability, generateLogMessage } from './nvidiaService';
+import { checkVerifierHealth, discoverCodes } from './apiService';
 
 // Maximum candidates to send to verifier (prevents overloading Puppeteer)
 const MAX_CODES_TO_VERIFY = 10;
