@@ -8,7 +8,7 @@
  * Expanded to 12 regions matching the frontend RegionSelector.
  */
 
-import type { GeoLocation, ProxyConfig } from './types.js';
+import type { GeoLocation, ProxyConfig } from './types';
 
 const PROXY_KEY = process.env.RESIDENTIAL_PROXY_API_KEY;
 const PROXY_HOST = 'brd.superproxy.io';

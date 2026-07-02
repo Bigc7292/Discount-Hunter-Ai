@@ -5,7 +5,7 @@ import {
     query,
     orderBy,
     limit,
-    onSnapshot,
+    getDocs,
     serverTimestamp,
     Timestamp
 } from 'firebase/firestore';
@@ -45,18 +45,23 @@ export const subscribeToRecentSavings = (
         limit(maxResults)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-        const savings: RecentSaving[] = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        } as RecentSaving));
-        callback(savings);
-    }, (error) => {
-        console.error('Error subscribing to recent savings:', error);
-        callback([]);
-    });
+    const loadSavings = async () => {
+        try {
+            const snapshot = await getDocs(q);
+            const savings: RecentSaving[] = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            } as RecentSaving));
+            callback(savings);
+        } catch (error) {
+            console.info('Recent savings feed unavailable:', error);
+            callback([]);
+        }
+    };
 
-    return unsubscribe;
+    void loadSavings();
+
+    return () => { };
 };
 
 /**

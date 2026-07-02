@@ -12,15 +12,18 @@
 
 import puppeteer from 'puppeteer';
 import type { Browser, Page } from 'puppeteer';
-import type { BrowserTestResult, ProxyConfig } from './types.js';
-import { formatProxyUrl } from './geoProxy.js';
+import type { BrowserTestResult, ProxyConfig } from './types';
+import { formatProxyUrl } from './geoProxy';
 
 // Singleton browser instance — reused across verifications
 let browserInstance: Browser | null = null;
 
 async function getBrowser(): Promise<Browser> {
   if (!browserInstance || !browserInstance.connected) {
+    const executablePath = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+
     browserInstance = await puppeteer.launch({
+      executablePath,
       headless: process.env.USE_HEADLESS_BROWSER !== 'false',
       args: [
         '--no-sandbox',

@@ -2,7 +2,7 @@
 
 > **STATUS**: STABLE // **LEVEL**: ALPHA // **UPLINK**: ACTIVE
 
-Discount Hunter AI is a high-performance SaaS platform designed for the modern "Hunter." It leverages the **Gemini 2.0 Oracle** to raid the global commerce network, extraction valid discount codes and system vulnerabilities (glitches) for immediate exfiltration.
+Discount Hunter AI is a high-performance SaaS platform designed for the modern "Hunter." It leverages **NVIDIA NIM** with **meta/llama-3.3-70b-instruct** via NVIDIA's integrate.api.nvidia.com to raid the global commerce network, extraction valid discount codes and system vulnerabilities (glitches) for immediate exfiltration.
 
 ![Project Preview](/logo.jpg)
 

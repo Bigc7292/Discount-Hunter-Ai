@@ -5,7 +5,7 @@ import { motion, AnimatePresence, useMotionValue, useSpring } from 'framer-motio
 // --- FIREBASE IMPORTS ---
 import { auth, db } from './firebaseConfig';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, collection, addDoc, query as firestoreQuery, onSnapshot, orderBy } from 'firebase/firestore';
+import { doc, getDoc, collection, addDoc, query as firestoreQuery, getDocs, orderBy } from 'firebase/firestore';
 
 import { SearchStatus, SearchResult, LogEntry, User, CouponCode, InboxItem, HistoryEntry } from './types';
 import { runSearch } from './services/searchService';
@@ -117,10 +117,10 @@ const LiveTicker = () => {
         return () => unsubscribe();
     }, []);
 
-    // Generate display text from savings data
+    // Generate display text from savings data without inventing activity
     const displayTexts = savings.length > 0
         ? savings.map(formatSavingForTicker)
-        : ['🔄 SYSTEM ONLINE: AWAITING LIVE DATA...'];
+        : ['LIVE FEED UNAVAILABLE'];
 
     return (
         <div className="bg-black/50 backdrop-blur border-b border-hunter-border py-1 overflow-hidden flex items-center z-50 relative">
@@ -193,15 +193,23 @@ export default function App() {
         return () => unsubscribe();
     }, []);
 
-    // Subscribe to User Inbox
+    // Load User Inbox once when the user is available
     useEffect(() => {
-        if (!user) { setInbox([]); return; }
-        const q = firestoreQuery(collection(db, "users", user.id, "inbox"), orderBy("savedAt", "desc"));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InboxItem));
-            setInbox(items);
-        });
-        return () => unsubscribe();
+        if (!user || !db) { setInbox([]); return; }
+
+        const loadInbox = async () => {
+            try {
+                const q = firestoreQuery(collection(db, "users", user.id, "inbox"), orderBy("savedAt", "desc"));
+                const snapshot = await getDocs(q);
+                const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InboxItem));
+                setInbox(items);
+            } catch (error) {
+                console.info('Inbox unavailable:', error);
+                setInbox([]);
+            }
+        };
+
+        void loadInbox();
     }, [user?.id]);
 
     useEffect(() => { function handleClickOutside(event: MouseEvent) { if (langMenuRef.current && !langMenuRef.current.contains(event.target as Node)) { setIsLangMenuOpen(false); } } document.addEventListener("mousedown", handleClickOutside); return () => document.removeEventListener("mousedown", handleClickOutside); }, []);

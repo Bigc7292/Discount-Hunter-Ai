@@ -11,12 +11,12 @@
  * Returns deduplicated candidates sorted by confidence.
  */
 
-import { searchForCodes as serperSearch } from './serperService.js';
-import { scrapeCouponPages, scrapeUrls } from './jinaService.js';
-import { searchSocialMedia } from './zernioService.js';
-import { tavilySearchForCodes } from './tavilyService.js';
-import { extractCodes, CandidateCode } from './codeExtractor.js';
-import { isRegionCompatible } from './regionUtils.js';
+import { searchForCodes as serperSearch } from './serperService';
+import { scrapeCouponPages, scrapeUrls } from './jinaService';
+import { searchSocialMedia } from './zernioService';
+import { tavilySearchForCodes } from './tavilyService';
+import { extractCodes, CandidateCode } from './codeExtractor';
+import { isRegionCompatible } from './regionUtils';
 
 export interface DiscoveryResult {
   candidates: CandidateCode[];
@@ -136,12 +136,22 @@ export async function discoverCodes(
 
   console.log(`[Orchestrator] Collected ${allSources.length} text sources total`);
 
-  // ── PHASE 4: Extract codes from all text ─────────────────────────────────
+  // ── PHASE 4: Extract codes from all text ────────────────────────────────────────
   console.log('[Orchestrator] Phase 2: Extracting codes from all sources...');
+
+  // ── Prepare sources: only keep those that already look like markdown ─────────────────
+  const preparedSources = await Promise.all(
+    allSources.map(async s => {
+      // If the source already looks like markdown (contains common markdown symbols) we keep it.
+      const looksLikeMarkdown = /[#>*-]/.test(s.text.slice(0, 200));
+      if (looksLikeMarkdown) return s;
+      return s;
+    })
+  );
 
   const codeMap = new Map<string, CandidateCode>();
   const allExtracted = await Promise.allSettled(
-    allSources.map(s =>
+    preparedSources.map(s =>
       extractCodes(s.text, storeName, s.source, s.url, region)
     )
   );

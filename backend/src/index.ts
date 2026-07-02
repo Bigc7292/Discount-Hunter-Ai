@@ -12,10 +12,14 @@
 import express from 'express';
 import cors from 'cors';
 import { z } from 'zod';
-import { verifyCodes } from './verifier.js';
-import { getAllSupportedRegions, getGeoLocation } from './geoProxy.js';
-import { cleanup } from './browserBot.js';
-import { discoverCodes } from './discovery.js';
+import { readdir } from 'fs/promises';
+import path from 'path';
+import { verifyCodes } from './verifier';
+import { getAllSupportedRegions, getGeoLocation } from './geoProxy';
+import { cleanup } from './browserBot';
+import { discoverCodes } from './discovery';
+import { runVerificationTests } from './testRunner';
+import { createProfileAccount } from './profileManager';
 import 'dotenv/config';
 
 const app = express();
@@ -51,6 +55,25 @@ const verifyRequestSchema = z.object({
 const discoverRequestSchema = z.object({
   query: z.string().min(1),
   region: z.string().default('GLOBAL'),
+});
+
+const testCaseSchema = z.object({
+  name: z.string().min(1),
+  request: z.object({
+    merchant: z.object({
+      name: z.string().min(1),
+      url: z.string().url(),
+    }),
+    codes: z.array(z.object({
+      code: z.string().min(1),
+      description: z.string().min(1),
+    })).min(1),
+    testRegion: z.string().default('US'),
+  }),
+});
+
+const testRunRequestSchema = z.object({
+  testCases: z.array(testCaseSchema).min(1),
 });
 
 // ── Routes ──────────────────────────────────────────────────────────────────
@@ -115,6 +138,37 @@ app.post('/discover', async (req, res) => {
   }
 });
 
+
+// Test runner — execute a batch of verification cases and save structured logs
+app.post('/tests/run', async (req, res) => {
+  try {
+    const body = testRunRequestSchema.parse(req.body);
+    const summary = await runVerificationTests(body.testCases as Array<{ name: string; request: { merchant: { name: string; url: string; region: string }; codes: Array<{ code: string; description: string; source: string; sourceUrl?: string; discoveredAt: string }>; testRegion: string } }>);
+    res.json(summary);
+  } catch (error) {
+    console.error('[TESTS] Error:', error);
+    res.status(500).json({ error: 'Test run failed', details: String(error) });
+  }
+});
+
+app.post('/profiles/create', async (_req, res) => {
+  const account = createProfileAccount('testing');
+  res.json({ account });
+});
+
+app.get('/tests/logs', async (_req, res) => {
+  try {
+    const logDir = path.resolve(process.cwd(), 'logs');
+    const entries = await readdir(logDir, { withFileTypes: true });
+    const files = entries
+      .filter(entry => entry.isFile())
+      .map(entry => entry.name)
+      .sort((a, b) => b.localeCompare(a));
+    res.json({ logDir, files });
+  } catch (error) {
+    res.json({ logDir: path.resolve(process.cwd(), 'logs'), files: [] });
+  }
+});
 
 // Verify — REAL checkout testing with Puppeteer
 app.post('/verify', async (req, res) => {

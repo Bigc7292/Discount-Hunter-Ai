@@ -7,7 +7,7 @@ import React, { useState } from 'react';
 import { CouponCode } from '../types';
 import {
   Copy, Check, ExternalLink, Clock, Bookmark, BookmarkCheck,
-  ShieldCheck, XCircle, AlertTriangle, Zap, MapPin, Timer
+  ShieldCheck, XCircle, AlertTriangle, Zap, MapPin, Timer, Globe
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 

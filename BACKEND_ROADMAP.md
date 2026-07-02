@@ -1,12 +1,20 @@
 # 🗺️ Backend Migration Roadmap
 
-This document serves as the "Instruction Manual" for Code Wiki to generate your interactive to-do list. It outlines the specific steps to move from the current **Mock Data** to a **Real Firebase Backend**.
+This document serves as the "Instruction Manual" for Code Wiki to generate your interactive to-do list. It outlines the specific steps to move from **Mock Data** to a **Real Firebase Backend**.
 
-## Phase 1: Infrastructure Setup
-- [ ] **Create Firebase Project**: Go to console.firebase.google.com and create "CodeSniper".
-- [ ] **Enable Auth**: Turn on "Email/Password" provider.
-- [ ] **Enable Firestore**: Create a database in "Test Mode".
-- [ ] **Copy Config**: Get the Firebase Config object and paste it into `src/firebaseConfig.ts`.
+## Current Status: REAL Puppeteer Backend ✅
+The verification backend is already implemented with:
+- **Real headless browser automation** (Puppeteer) for checkout verification
+- **Multi-source discovery pipeline** (5 parallel services: Serper, Jina, Zernio, Tavily, Firecrawl)
+- **Regional proxy targeting** with real residential proxy support
+- **Confidence scoring** based on actual checkout results (≥85% = verified)
+
+The backend is live and operational - no migration from mock data needed.
+
+## Phase 1: Infrastructure Setup (If needed for expansion)
+- [ ] **Create additional regions** for global discovery (US, UAE, UK, CA, MX, DE, FR, ES, IT, NL, PL, TR, AE, SA, AU, JP)
+- [ ] **Enhance discovery pipeline** with additional sources or AI model integration
+- [ ] **Add user-specific inbox management** (optional, if needed for your use case)
 
 ## Phase 2: Authentication Wiring
 *Goal: Replace the fake `handleLogin` in `App.tsx` with real Firebase Auth.*

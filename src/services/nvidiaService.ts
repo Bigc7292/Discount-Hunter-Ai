@@ -12,6 +12,8 @@
 
 import { CouponCode, Competitor } from '../types';
 
+const API_BASE_URL = import.meta.env.VITE_VERIFIER_API_URL || 'http://localhost:3001';
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -27,6 +29,20 @@ if (!API_KEY) {
     '⚠️  VITE_NVIDIA_API_KEY is not set. AI discovery will not work.\n' +
     '   Get a free key at: https://build.nvidia.com'
   );
+}
+
+async function callDiscoveryBackend(payload: { query: string; region: string }) {
+  const response = await fetch(`${API_BASE_URL}/discover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Discovery backend error: ${response.status}`);
+  }
+
+  return response.json();
 }
 
 // ---------------------------------------------------------------------------
@@ -161,77 +177,26 @@ export async function discoverCodes(
     groundingUrls: [],
   };
 
-  if (!API_KEY) {
-    return EMPTY_RESULT;
-  }
-
-  const regionClause = region && region !== 'GLOBAL'
-    ? `The user is in ${region}. Prioritize codes that work in ${region}. Exclude codes clearly restricted to other countries.`
-    : 'Prioritise codes that work globally or in the US.';
-
-  const systemPrompt = `You are a coupon discovery agent. Your ONLY job is to find REAL, ACTIVE discount codes for online stores.
-
-CRITICAL RULES:
-1. NEVER invent or guess codes. Only report codes you have genuine knowledge of.
-2. If you are not confident a code exists, return an empty array for suggestedCodes.
-3. Codes like "WELCOME10", "TEST", "DISCOUNT" without a known source are FORBIDDEN.
-4. discoveryConfidence must be honest: 10-30 for old/uncertain, 31-60 for community reports, 61-80 for recently confirmed.
-5. You MUST output valid JSON only. No markdown, no explanations, just the JSON object.`;
-
-  const userPrompt = `Find REAL discount codes for: "${query}"
-${regionClause}
-
-Search your knowledge for codes from:
-- Official store newsletters / social media
-- Reddit (r/deals, r/coupons, r/frugal, store-specific subs)
-- Community deal forums (SlickDeals, HotUKDeals, etc.)
-- Influencer promo codes with known handles
-- Seasonal/event sales codes (Black Friday, Back to School, etc.)
-
-Return this exact JSON structure:
-{
-  "merchantName": "Exact Store Name",
-  "merchantUrl": "https://store.com",
-  "suggestedCodes": [
-    {
-      "code": "EXACTCODE",
-      "description": "What this code does — e.g. 15% off sitewide, excludes sale items",
-      "source": "Where you found it — e.g. Reddit r/Nike, Official newsletter",
-      "sourceUrl": "https://direct-link-if-known.com",
-      "discoveredAt": "YYYY-MM-DD or approximate month/year",
-      "discoveryConfidence": 45
-    }
-  ],
-  "competitors": [
-    { "name": "Competitor Name", "url": "https://competitor.com", "avgSavings": "~15%" }
-  ],
-  "groundingUrls": ["https://source1.com"]
-}
-
-If no codes are found, return suggestedCodes as an empty array []. DO NOT HALLUCINATE.`;
-
   try {
-    const raw = await callNvidia(systemPrompt, userPrompt);
-    const parsed = safeParseJSON<DiscoveryResult>(raw, EMPTY_RESULT);
+    const response = await callDiscoveryBackend({ query, region });
 
     return {
-      merchantName: parsed.merchantName || query,
-      merchantUrl: parsed.merchantUrl || EMPTY_RESULT.merchantUrl,
-      suggestedCodes: (parsed.suggestedCodes || [])
-        .filter(c => c.code && c.code.length >= 3 && c.code.length <= 30)
-        .map(c => ({
+      merchantName: response.merchantName || query,
+      merchantUrl: response.merchantUrl || EMPTY_RESULT.merchantUrl,
+      suggestedCodes: (response.suggestedCodes || [])
+        .filter((c: any) => c.code && c.code.length >= 3 && c.code.length <= 30)
+        .map((c: any) => ({
           ...c,
           code: c.code.toUpperCase().trim(),
           discoveryConfidence: Math.min(80, Math.max(10, c.discoveryConfidence || 30)),
           discoveredAt: c.discoveredAt || new Date().toISOString().split('T')[0],
         }))
-        .slice(0, 10), // Cap at 10 candidates max — prevents Puppeteer overload
-      competitors: parsed.competitors || [],
-      groundingUrls: parsed.groundingUrls || [],
+        .slice(0, 10),
+      competitors: response.competitors || [],
+      groundingUrls: response.groundingUrls || [],
     };
-
   } catch (error) {
-    console.error('NVIDIA discovery failed:', error);
+    console.warn('Discovery backend unavailable, returning empty result:', error);
     return EMPTY_RESULT;
   }
 }
@@ -241,35 +206,7 @@ If no codes are found, return suggestedCodes as an empty array []. DO NOT HALLUC
 // ---------------------------------------------------------------------------
 
 export async function findInfluencerCodes(merchantName: string): Promise<CouponCode[]> {
-  if (!API_KEY) return [];
-
-  const systemPrompt = `You are a social media coupon scanner. Find influencer promo codes only if you have genuine knowledge of them. Return empty array if uncertain. Output valid JSON only.`;
-
-  const userPrompt = `Find ACTIVE influencer/creator promo codes for "${merchantName}".
-Look for: [CreatorName][Brand], [Brand][Creator], partnership codes.
-Return JSON array (empty [] if none found):
-[{"code":"HANDLE25","description":"25% off via influencer partnership","successRate":55,"source":"YouTube @channelname"}]`;
-
-  try {
-    const raw = await callNvidia(systemPrompt, userPrompt);
-    const codes = safeParseJSON<any[]>(raw, []);
-
-    if (!Array.isArray(codes)) return [];
-
-    return codes
-      .filter(c => c.code && typeof c.code === 'string')
-      .map(c => ({
-        code: (c.code as string).toUpperCase().trim(),
-        description: c.description || 'Influencer promo code',
-        successRate: Math.min(70, Math.max(10, c.successRate || 40)),
-        lastVerified: 'Social scan — NOT checkout verified',
-        source: c.source || 'Social media',
-        isVerified: false,
-        status: 'unverified' as const,
-      }));
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -279,28 +216,7 @@ Return JSON array (empty [] if none found):
 export async function checkGlitchProbability(
   merchantName: string
 ): Promise<{ probability: number; warning?: string }> {
-  if (!API_KEY) return { probability: 0 };
-
-  const systemPrompt = `You are a retail pricing analyst. Assess price glitch probability based on known retailer patterns. Output valid JSON only.`;
-
-  const userPrompt = `Assess price glitch probability (0-100) for "${merchantName}".
-Known high-glitch retailers (Amazon, Walmart, airline booking): 15-30%
-Stable direct-to-consumer brands: 1-5%
-Return JSON: {"probability": number, "warning": "string or null"}`;
-
-  try {
-    const raw = await callNvidia(systemPrompt, userPrompt);
-    const result = safeParseJSON<{ probability: number; warning?: string }>(
-      raw,
-      { probability: 0 }
-    );
-    return {
-      probability: Math.min(100, Math.max(0, result.probability || 0)),
-      warning: result.warning || undefined,
-    };
-  } catch {
-    return { probability: 0 };
-  }
+  return { probability: 0 };
 }
 
 // ---------------------------------------------------------------------------

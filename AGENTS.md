@@ -11,7 +11,8 @@ A SaaS platform that discovers REAL discount codes and verifies them through act
 - **Fake success rates** - Hardcoded 100% successRate
 
 ### Now (Real)
-- **MiniMax M2.5** - $0.30/$1.20 per M tokens (10-20x cheaper)
+- **NVIDIA NIM** - **FREE** tier available (no credit card required)
+- **meta/llama-3.3-70b-instruct** via NVIDIA API
 - **Real verification** - Headless browser tests codes against actual checkout
 - **Real confidence scores** - Based on actual test results
 
@@ -32,17 +33,17 @@ A SaaS platform that discovers REAL discount codes and verifies them through act
           ┌───────────────────────┴───────────────────────┐
           ▼                                               ▼
 ┌─────────────────────┐                     ┌─────────────────────┐
-│   minimaxService    │                     │   apiService.ts      │
+│   nvidiaService     │                     │   apiService.ts      │
 │   (Discovery Only)  │                     │   (Backend Verifier) │
 │                     │                     │                     │
 │ • discoverCodes()   │                     │ • verifyCodes()      │
 │ • findInfluencer()  │                     │ • Real checkout test│
 │ • checkGlitch()     │                     │ • Geo-proxy testing  │
 │                     │                     │                     │
-│ Uses MiniMax M2.5   │                     │ Uses Puppeteer +    │
+│ Uses NVIDIA NIM      │                     │ Uses Puppeteer +    │
 │ OpenAI-compatible   │                     │ Residential Proxies  │
 └─────────────────────┘                     └──────────┬──────────┘
-                                                       │
+                                                        │
                               ┌────────────────────────┼────────────────────────┐
                               ▼                        ▼                        ▼
                      ┌──────────────┐          ┌──────────────┐          ┌──────────────┐
@@ -53,7 +54,7 @@ A SaaS platform that discovers REAL discount codes and verifies them through act
 
 ## Pipeline Flow
 
-### 1. Discovery Phase (MiniMax)
+### 1. Discovery Phase (NVIDIA NIM)
 - AI scans for codes from real sources (Reddit, forums, official sites)
 - Returns candidate codes with source attribution
 - No verification yet - just discovery
@@ -77,24 +78,32 @@ A SaaS platform that discovers REAL discount codes and verifies them through act
 discount-hunter-ai/
 ├── src/
 │   ├── services/
-│   │   ├── minimaxService.ts    # AI discovery (UPDATED)
+│   │   ├── nvidiaService.ts    # AI discovery (NVIDIA NIM, FREE)
 │   │   ├── searchService.ts     # Pipeline orchestrator (NEW)
 │   │   ├── apiService.ts        # Backend communication (NEW)
-│   │   └── geminiService.ts     # DEPRECATED - Remove
+│   │   └── recentSavingsService.ts # Firebase integration (NEW)
+│   ├── components/             # UI Components
 │   ├── types.ts                 # Updated with real verification types
-│   └── App.tsx                  # Updated to use new services
+│   └── App.tsx                  # Main application
 │
 ├── backend/                     # NEW - Verification backend
 │   ├── src/
 │   │   ├── index.ts            # Express server
-│   │   ├── discovery.ts        # MiniMax discovery wrapper
 │   │   ├── verifier.ts         # Real code verification
 │   │   ├── browserBot.ts       # Puppeteer headless testing
 │   │   ├── geoProxy.ts         # Geo-location proxy rotation
+│   │   └── discovery/
+│   │       ├── orchestrator.ts # Main discovery engine
+│   │       ├── serperService.ts # Google search (Serper)
+│   │       ├── jinaService.ts   # Coupon page scraper
+│   │       ├── zernioService.ts # Reddit/social media
+│   │       ├── tavilyService.ts # AI web search
+│   │       ├── firecrawlService.ts # Content cleanup
+│   │       └── codeExtractor.ts # Code extraction logic
 │   │   └── types.ts
 │   └── package.json
 │
-├── .env.example                 # Updated with MiniMax keys
+├── .env.example                 # Updated with NVIDIA keys
 └── AGENTS.md                   # This file
 ```
 
@@ -111,13 +120,12 @@ discount-hunter-ai/
 
 ### Frontend (.env)
 ```env
-VITE_MINIMAX_API_KEY=your_key
+VITE_NVIDIA_API_KEY=your_key
 VITE_VERIFIER_API_URL=http://localhost:3001
 ```
 
 ### Backend (.env)
 ```env
-MINIMAX_API_KEY=your_key
 PORT=3001
 RESIDENTIAL_PROXY_API_KEY=optional_but_recommended
 ```
