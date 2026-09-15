@@ -1,14 +1,27 @@
-import React from 'react';
-import { X, Check, Zap, Star } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Check, Zap, Star, Loader2 } from 'lucide-react';
 
 interface PricingModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onUpgrade: () => void;
+  onUpgrade: () => void | Promise<void>;
 }
 
 const PricingModal: React.FC<PricingModalProps> = ({ isOpen, onClose, onUpgrade }) => {
+  const [loading, setLoading] = useState(false);
+
   if (!isOpen) return null;
+
+  const handleUpgradeClick = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      await onUpgrade();
+    } catch (err) {
+      console.error('Checkout failed:', err);
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4 overflow-y-auto">
@@ -42,18 +55,18 @@ const PricingModal: React.FC<PricingModalProps> = ({ isOpen, onClose, onUpgrade 
             </button>
         </div>
 
-        {/* Pro Tier */}
+        {/* Lifetime Tier */}
         <div className="p-8 flex flex-col bg-hunter-cyan/5 relative">
             <div className="absolute top-0 right-0 bg-hunter-cyan text-black text-[10px] font-bold px-3 py-1 rounded-bl-lg">
-                MOST POPULAR
+                BEST VALUE
             </div>
 
             <div className="mb-6">
                 <h3 className="text-xl font-bold text-white flex items-center gap-2 font-display tracking-wide">
-                    Sniper Elite <Zap size={18} className="text-hunter-purple animate-pulse" />
+                    Sniper Elite Lifetime <Zap size={18} className="text-hunter-purple animate-pulse" />
                 </h3>
-                <div className="text-4xl font-mono font-bold text-white mt-2">$9.99<span className="text-sm font-sans text-gray-500 font-normal">/mo</span></div>
-                <p className="text-sm text-hunter-cyan mt-2">Start with 7 days free. Then $9.99/mo.</p>
+                <div className="text-4xl font-mono font-bold text-white mt-2">$49<span className="text-sm font-sans text-gray-500 font-normal"> once</span></div>
+                <p className="text-sm text-hunter-cyan mt-2">One-time payment. Lifetime access. Stripe TEST MODE ready.</p>
             </div>
             
             <ul className="space-y-4 mb-8 flex-1">
@@ -76,12 +89,17 @@ const PricingModal: React.FC<PricingModalProps> = ({ isOpen, onClose, onUpgrade 
             </ul>
 
             <button 
-                onClick={onUpgrade}
-                className="w-full py-3 rounded-lg bg-gradient-to-r from-hunter-cyan to-hunter-green text-black font-bold shadow-lg shadow-hunter-cyan/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 font-display tracking-wider"
+                onClick={handleUpgradeClick}
+                disabled={loading}
+                className="w-full py-3 rounded-lg bg-gradient-to-r from-hunter-cyan to-hunter-green text-black font-bold shadow-lg shadow-hunter-cyan/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 font-display tracking-wider disabled:opacity-60 disabled:hover:scale-100"
             >
-                <Star size={18} className="fill-black/20" /> START 7-DAY FREE TRIAL
+                {loading ? (
+                  <><Loader2 size={18} className="animate-spin" /> REDIRECTING TO STRIPE...</>
+                ) : (
+                  <><Star size={18} className="fill-black/20" /> UNLOCK LIFETIME ACCESS</>
+                )}
             </button>
-            <p className="text-center text-[10px] text-gray-500 mt-3">Cancel anytime. Secured by Stripe.</p>
+            <p className="text-center text-[10px] text-gray-500 mt-3">One-time payment. Secured by Stripe.</p>
         </div>
 
       </div>
