@@ -91,7 +91,7 @@ export interface User {
   id: string;
   email: string;
   role: 'user' | 'admin';
-  plan: 'free' | 'pro' | 'lifetime';
+  plan: 'free' | 'pro' | 'yearly' | 'lifetime';
   searchCount: number;
   dailySearchesUsed: number;
   dailySearchLimit: number;
@@ -104,7 +104,14 @@ export interface User {
   trialEndsAt?: string;
   stripeCustomerId?: string;
   lifetimePurchasedAt?: string;
+  yearlyPurchasedAt?: string;
 }
+
+/** Paid verified-access plans (yearly / lifetime / legacy pro). */
+export function hasVerifiedAccess(plan: User['plan']): boolean {
+  return plan === 'pro' || plan === 'yearly' || plan === 'lifetime';
+}
+
 
 export interface PricingTier {
   name: string;
