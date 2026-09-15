@@ -15,6 +15,13 @@ service cloud.firestore {
       }
     }
 
+
+    // Public verified-checkout ledger — anyone can read; writes only via Admin SDK
+    match /checkoutLedger/{entryId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Public Live Ticker Data – allow anyone to read recent savings
     match /recentSavings/{savingId} {
       // Unauthenticated users can read (list & get) recent savings for the ticker

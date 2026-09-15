@@ -232,3 +232,52 @@ export async function createCheckoutSession(
 export async function createLifetimeCheckoutSession(idToken: string): Promise<{ url: string }> {
   return createCheckoutSession(idToken, 'lifetime');
 }
+
+// ---------------------------------------------------------------------------
+// Public verified-checkout ledger (redacted codes only)
+// ---------------------------------------------------------------------------
+
+export interface CheckoutLedgerEntry {
+  id: string;
+  merchant: string;
+  merchantUrl?: string;
+  cartSummary: string;
+  result: 'pass' | 'fail' | 'error' | 'expired';
+  testedAt: string;
+  region: string;
+  confidence?: number;
+  codeLast4: string;
+  codeHash: string;
+}
+
+export interface CheckoutLedgerResponse {
+  entries: CheckoutLedgerEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  source: 'firestore' | 'memory';
+}
+
+export async function fetchCheckoutLedger(
+  limit: number = 50,
+  offset: number = 0
+): Promise<CheckoutLedgerResponse | null> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const response = await fetch(
+      `${API_BASE_URL}/ledger?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timeout);
+    if (!response.ok) {
+      console.error(`Ledger error: HTTP ${response.status}`);
+      return null;
+    }
+    return await response.json() as CheckoutLedgerResponse;
+  } catch (error) {
+    console.error('Ledger service error:', error);
+    return null;
+  }
+}
+
