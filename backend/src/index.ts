@@ -1,7 +1,7 @@
 /**
  * Backend Verifier — Express server
  * Exposes POST /verify for real Puppeteer checkout testing.
- * Also hosts Stripe lifetime Checkout + webhook (TEST MODE).
+ * Also hosts Stripe yearly/lifetime Checkout + webhook (TEST MODE).
  *
  * Fixes applied:
  * - Removed duplicate /health route
@@ -57,6 +57,7 @@ const stripe = stripeSecret
   : null;
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const YEARLY_PRICE_ID = process.env.STRIPE_YEARLY_PRICE_ID || '';
 const LIFETIME_PRICE_ID = process.env.STRIPE_LIFETIME_PRICE_ID || '';
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 
@@ -100,18 +101,22 @@ app.post('/stripe/webhook', express.raw({ type: 'application/json' }), async (re
         console.error('[STRIPE] Firestore admin unavailable — cannot upgrade', userId);
       } else {
         const purchasedAt = new Date().toISOString();
-        await firestore.collection('users').doc(userId).set(
-          {
-            plan: 'lifetime',
-            dailySearchLimit: 100000,
-            lifetimePurchasedAt: purchasedAt,
-            stripeCustomerId:
-              typeof session.customer === 'string' ? session.customer : session.customer?.id || null,
-            stripeCheckoutSessionId: session.id,
-          },
-          { merge: true }
-        );
-        console.log(`[STRIPE] Lifetime unlocked for user ${userId}`);
+        const product = (session.metadata?.product || session.metadata?.plan || 'lifetime') as string;
+        const plan = product === 'yearly' ? 'yearly' : 'lifetime';
+        const patch: Record<string, unknown> = {
+          plan,
+          dailySearchLimit: 100000,
+          stripeCustomerId:
+            typeof session.customer === 'string' ? session.customer : session.customer?.id || null,
+          stripeCheckoutSessionId: session.id,
+        };
+        if (plan === 'yearly') {
+          patch.yearlyPurchasedAt = purchasedAt;
+        } else {
+          patch.lifetimePurchasedAt = purchasedAt;
+        }
+        await firestore.collection('users').doc(userId).set(patch, { merge: true });
+        console.log(`[STRIPE] ${plan} verified access unlocked for user ${userId}`);
       }
     }
     res.json({ received: true });
@@ -195,24 +200,35 @@ app.get('/regions', (_req, res) => {
   res.json(getAllSupportedRegions());
 });
 
-// Stripe — create lifetime Checkout Session (one-time payment, TEST MODE)
+// Stripe — create yearly (subscription) or lifetime (one-time) Checkout Session (TEST MODE)
 app.post('/stripe/create-checkout-session', async (req, res) => {
   try {
-    if (!stripe || !LIFETIME_PRICE_ID) {
+    if (!stripe) {
       return res.status(503).json({
-        error: 'Stripe not configured. Set STRIPE_SECRET_KEY and STRIPE_LIFETIME_PRICE_ID.',
+        error: 'Stripe not configured. Set STRIPE_SECRET_KEY and price IDs.',
+      });
+    }
+
+    const planRaw = (req.body?.plan || 'lifetime') as string;
+    const plan = planRaw === 'yearly' ? 'yearly' : 'lifetime';
+    const priceId = plan === 'yearly' ? YEARLY_PRICE_ID : LIFETIME_PRICE_ID;
+
+    if (!priceId) {
+      const missing = plan === 'yearly' ? 'STRIPE_YEARLY_PRICE_ID' : 'STRIPE_LIFETIME_PRICE_ID';
+      return res.status(503).json({
+        error: `Stripe not configured. Set STRIPE_SECRET_KEY and ${missing}.`,
       });
     }
 
     const userId = await verifyFirebaseIdToken(req.headers.authorization);
 
     const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      line_items: [{ price: LIFETIME_PRICE_ID, quantity: 1 }],
-      success_url: `${FRONTEND_URL}?checkout=success`,
+      mode: plan === 'yearly' ? 'subscription' : 'payment',
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${FRONTEND_URL}?checkout=success&plan=${plan}`,
       cancel_url: `${FRONTEND_URL}?checkout=cancel`,
       client_reference_id: userId,
-      metadata: { userId, product: 'lifetime' },
+      metadata: { userId, product: plan, plan },
       allow_promotion_codes: true,
     });
 
@@ -220,7 +236,7 @@ app.post('/stripe/create-checkout-session', async (req, res) => {
       return res.status(500).json({ error: 'Stripe did not return a checkout URL' });
     }
 
-    res.json({ url: session.url, sessionId: session.id });
+    res.json({ url: session.url, sessionId: session.id, plan });
   } catch (error: any) {
     const status = error?.status || 500;
     console.error('[STRIPE] create-checkout-session error:', error);

@@ -264,7 +264,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, isOpen, onClose, onLogout, 
                                     <div className="col-span-2">
                                         <button 
                                             onClick={() => handleTogglePlan(u.id)}
-                                            className={`text-[10px] font-bold px-2 py-0.5 rounded border transition-colors ${(u.plan === 'pro' || u.plan === 'lifetime') ? 'bg-hunter-cyan/20 text-hunter-cyan border-hunter-cyan/30 hover:bg-hunter-cyan/30' : 'bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600'}`}
+                                            className={`text-[10px] font-bold px-2 py-0.5 rounded border transition-colors ${(u.plan === 'pro' || u.plan === 'yearly' || u.plan === 'lifetime') ? 'bg-hunter-cyan/20 text-hunter-cyan border-hunter-cyan/30 hover:bg-hunter-cyan/30' : 'bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600'}`}
                                         >
                                             {u.plan.toUpperCase()}
                                         </button>
@@ -316,10 +316,10 @@ const Dashboard: React.FC<DashboardProps> = ({ user, isOpen, onClose, onLogout, 
                             {/* ID Card */}
                             <div className="bg-hunter-surface border border-hunter-border rounded-xl p-5 relative overflow-hidden">
                                 <div className="absolute top-0 right-0 p-3 flex flex-col items-end gap-1">
-                                    {user.plan === 'pro' || user.plan === 'lifetime' ? (
+                                    {user.plan === 'pro' || user.plan === 'yearly' || user.plan === 'lifetime' ? (
                                         <span className="bg-hunter-cyan text-black text-[10px] font-bold px-2 py-1 rounded flex items-center gap-1">
                                             <Crown size={10} /> 
-                                            {user.trialEndsAt ? 'TRIAL ACTIVE' : 'PRO'}
+                                            {user.trialEndsAt ? 'TRIAL ACTIVE' : user.plan === 'lifetime' ? 'LIFETIME' : user.plan === 'yearly' ? 'YEARLY' : 'PRO'}
                                         </span>
                                     ) : (
                                         <span className="bg-gray-700 text-gray-300 text-[10px] font-bold px-2 py-1 rounded">
@@ -358,12 +358,12 @@ const Dashboard: React.FC<DashboardProps> = ({ user, isOpen, onClose, onLogout, 
                                     ></div>
                                 </div>
                                 {user.plan === 'free' && (
-                                    <p className="text-[10px] text-hunter-muted mt-2">Upgrade to Pro for unlimited searches.</p>
+                                    <p className="text-[10px] text-hunter-muted mt-2">Upgrade for verified access (yearly or lifetime).</p>
                                 )}
                             </div>
 
                             {/* Chrome Extension CTA */}
-                            {(user.plan === 'pro' || user.plan === 'lifetime') && (
+                            {(user.plan === 'pro' || user.plan === 'yearly' || user.plan === 'lifetime') && (
                                 <div className="bg-blue-900/10 border border-blue-500/20 rounded-xl p-4 flex items-center justify-between">
                                     <div className="flex items-center gap-3">
                                         <div className="bg-blue-500/20 p-2 rounded-lg">
