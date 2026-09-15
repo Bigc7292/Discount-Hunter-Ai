@@ -1,56 +1,62 @@
-# ⚡ DISCOUNT HUNTER AI: THE HUNTER PROTOCOL
+# Discount Hunter AI
 
-> **STATUS**: STABLE // **LEVEL**: ALPHA // **UPLINK**: ACTIVE
+> **STATUS**: Alpha — launch work is on open PRs (not yet on `main`)  
+> **SHIPPING**: via `gh` (CloudAgent unavailable on current plan)
 
-Discount Hunter AI is a high-performance SaaS platform designed for the modern "Hunter." It leverages **NVIDIA NIM** with **meta/llama-3.3-70b-instruct** via NVIDIA's integrate.api.nvidia.com to raid the global commerce network, extraction valid discount codes and system vulnerabilities (glitches) for immediate exfiltration.
+Autonomous agent that **discovers, tests, and validates** merchant discount codes before showing them to users.
 
-![Project Preview](/logo.jpg)
+## Launch invariant
 
-## 🚀 MISSION CAPABILITIES
+**Never surface untested / unverified codes in the UI.**  
+Verify-only UI is implemented on [PR #4](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/4) (`feat/verify-only-ui`) — **pending merge**.
 
-*   **Cyber-Tech Interface**: A premium, dark-themed UI built with glassmorphism, neon accents, and high-energy animations.
-*   **Neural Node Network**: Powered by Gemini 3.0, identifying merchant targets and cracking their code encryption with 99% accuracy.
-*   **Aggressive AI Operative**: A built-in console personality that raids shadow networks, Discord voids, and private API nodes.
-*   **Geo-Pulse Selector**: Smart location-based hunting to find region-specific extractions.
-*   **Secure Vault**: All successful extractions are archived in your personal encrypted Inbox.
+## Open launch PRs (on branches — pending merge)
 
-## 🛠️ TECH STACK (THE ARSENAL)
+| PR | Branch | What it adds |
+|----|--------|----------------|
+| [#1](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/1) | `feat/stripe-lifetime-firestore-persist` | Stripe $49 LTD checkout + Firestore inbox/history persist (pending owner secrets smoke) |
+| [#2](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/2) | `feat/verified-checkout-ledger` | Verified Checkout Ledger + rate limits on verify/discover |
+| [#3](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/3) | `feat/agentmail-verifier-inbox` | AgentMail inbox `discount-hunter@agentmail.to` (OTP stub) |
+| [#4](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/4) | `feat/verify-only-ui` | Verify-only UI — no unverified / social codes in UI |
 
-*   **Core**: React + TypeScript + Vite
-*   **Intelligence**: Google Gemini API (Flash 2.0)
-*   **Database & Auth**: Firebase (Auth & Firestore)
-*   **Dynamics**: Framer Motion & Tailwind CSS
-*   **Signals**: Lucide React Icons
+Do **not** treat these as present on `main` until merged.
 
-## 📡 DEPLOYMENT INSTRUCTIONS
+## Product rules
 
-1.  **Clone the Repository**:
-    ```bash
-    git clone https://github.com/your-repo/discount-hunter-ai.git
-    cd discount-hunter-ai
-    ```
+* **Bot email**: AgentMail only (`discount-hunter@agentmail.to`) — never personal email ([PR #3](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/3), pending merge).
+* **Data / auth**: **Firebase only** (Auth + Firestore). No Supabase.
+* **Monetisation**: Optional **$49 LTD** via Stripe on [PR #1](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/1) (pending merge). Research recommends freemium + ~$24/yr as the primary model later.
 
-2.  **Install Dependencies**:
-    ```bash
-    npm install
-    ```
+## Tech stack (as on `main` today)
 
-3.  **Configure Environment Variables**:
-    Create a `.env` file in the root directory:
-    ```env
-    VITE_GEMINI_API_KEY=your_gemini_key
-    VITE_FIREBASE_API_KEY=your_firebase_key
-    ... (add other firebase config)
-    ```
+* **Frontend**: React + TypeScript + Vite, Tailwind, Framer Motion
+* **Discovery**: NVIDIA NIM (`meta/llama-3.3-70b-instruct`) + backend discovery services
+* **Verification**: Backend (Express + Puppeteer / geo proxies)
+* **Auth & DB**: Firebase (Auth & Firestore)
 
-4.  **Initialize Uplink**:
-    ```bash
-    npm run dev
-    ```
+## Quick start
 
-## 📜 PROTOCOLS & ARCHITECTURE
+```bash
+git clone https://github.com/Bigc7292/Discount-Hunter-Ai.git
+cd Discount-Hunter-Ai
+npm install
+cp .env.example .env   # fill key names only — never commit secrets
+npm run dev
+```
 
-See [ARCHITECTURE.md](file:///c:/Users/toplo/Downloads/discount-hunter-ai/ARCHITECTURE.md) for a deep dive into the Hunter Protocol data flow and component hierarchy.
+Backend (separate terminal):
+
+```bash
+cd backend && npm install && cp .env.example .env && npm run dev
+```
+
+Env key names (values stay local / host secrets): see `.env.example` and `backend/.env.example`. Launch-PR keys (pending merge) include `VITE_STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_LIFETIME_PRICE_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `AGENTMAIL_INBOX_EMAIL`, `AGENTMAIL_API_KEY`, and rate-limit / ledger keys.
+
+## Docs
+
+* [AGENTS.md](./AGENTS.md) — pipeline, confidence, local run
+* [ARCHITECTURE.md](./ARCHITECTURE.md) — funnel & UI hierarchy
+* [MIGRATION_TODO.md](./MIGRATION_TODO.md) — DoD / launch checklist (tied to open PRs)
 
 ---
-*Authorized Personnel Only. Proceed with Caution.*
+*Authorized personnel only.*
