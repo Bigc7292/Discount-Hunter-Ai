@@ -65,8 +65,11 @@ const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 
 // ── Middleware ──────────────────────────────────────────────────────────────
 
+// Production: set FRONTEND_URL to the Vercel origin (e.g. https://your-app.vercel.app).
+// When unset (local/dev), allow all origins.
+const corsOrigin = process.env.FRONTEND_URL || '*';
 app.use(cors({
-  origin: '*', // Tighten this to your Vercel domain in production
+  origin: corsOrigin,
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
