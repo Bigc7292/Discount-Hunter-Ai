@@ -1,6 +1,7 @@
 /**
  * Backend Verifier — Express server
  * Exposes POST /verify for real Puppeteer checkout testing.
+ * Also hosts Stripe lifetime Checkout + webhook (TEST MODE).
  *
  * Fixes applied:
  * - Removed duplicate /health route
@@ -14,6 +15,8 @@ import cors from 'cors';
 import { z } from 'zod';
 import { readdir } from 'fs/promises';
 import path from 'path';
+import Stripe from 'stripe';
+import admin from 'firebase-admin';
 import { verifyCodes } from './verifier';
 import { getAllSupportedRegions, getGeoLocation } from './geoProxy';
 import { cleanup } from './browserBot';
@@ -25,6 +28,38 @@ import 'dotenv/config';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// ── Firebase Admin (optional until FIREBASE_SERVICE_ACCOUNT_JSON is set) ─────
+
+function initFirebaseAdmin(): admin.firestore.Firestore | null {
+  if (admin.apps.length) return admin.firestore();
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    console.warn('[FIREBASE] FIREBASE_SERVICE_ACCOUNT_JSON not set — Stripe webhook cannot upgrade users');
+    return null;
+  }
+  try {
+    const cred = JSON.parse(raw);
+    admin.initializeApp({ credential: admin.credential.cert(cred) });
+    return admin.firestore();
+  } catch (err) {
+    console.error('[FIREBASE] Failed to init admin SDK:', err);
+    return null;
+  }
+}
+
+const firestore = initFirebaseAdmin();
+
+// ── Stripe (TEST MODE) ──────────────────────────────────────────────────────
+
+const stripeSecret = process.env.STRIPE_SECRET_KEY || '';
+const stripe = stripeSecret
+  ? new Stripe(stripeSecret, { apiVersion: '2024-11-20.acacia' })
+  : null;
+
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const LIFETIME_PRICE_ID = process.env.STRIPE_LIFETIME_PRICE_ID || '';
+const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+
 // ── Middleware ──────────────────────────────────────────────────────────────
 
 app.use(cors({
@@ -32,6 +67,59 @@ app.use(cors({
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
+// Stripe webhook MUST receive the raw body — mount before express.json()
+app.post('/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!stripe) {
+    return res.status(503).json({ error: 'Stripe not configured' });
+  }
+
+  let event: Stripe.Event;
+  try {
+    const sig = req.headers['stripe-signature'];
+    if (!sig || !WEBHOOK_SECRET) {
+      return res.status(400).json({ error: 'Missing stripe-signature or STRIPE_WEBHOOK_SECRET' });
+    }
+    event = stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('[STRIPE] Webhook signature verification failed:', err);
+    return res.status(400).json({ error: 'Webhook signature verification failed' });
+  }
+
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const userId =
+        session.client_reference_id ||
+        session.metadata?.userId ||
+        null;
+
+      if (!userId) {
+        console.error('[STRIPE] checkout.session.completed missing userId');
+      } else if (!firestore) {
+        console.error('[STRIPE] Firestore admin unavailable — cannot upgrade', userId);
+      } else {
+        const purchasedAt = new Date().toISOString();
+        await firestore.collection('users').doc(userId).set(
+          {
+            plan: 'lifetime',
+            dailySearchLimit: 100000,
+            lifetimePurchasedAt: purchasedAt,
+            stripeCustomerId:
+              typeof session.customer === 'string' ? session.customer : session.customer?.id || null,
+            stripeCheckoutSessionId: session.id,
+          },
+          { merge: true }
+        );
+        console.log(`[STRIPE] Lifetime unlocked for user ${userId}`);
+      }
+    }
+    res.json({ received: true });
+  } catch (err) {
+    console.error('[STRIPE] Webhook handler error:', err);
+    res.status(500).json({ error: 'Webhook handler failed' });
+  }
+});
 
 app.use(express.json({ limit: '2mb' }));
 
@@ -76,6 +164,18 @@ const testRunRequestSchema = z.object({
   testCases: z.array(testCaseSchema).min(1),
 });
 
+async function verifyFirebaseIdToken(authHeader: string | undefined): Promise<string> {
+  if (!authHeader?.startsWith('Bearer ')) {
+    throw Object.assign(new Error('Missing Authorization Bearer token'), { status: 401 });
+  }
+  if (!admin.apps.length) {
+    throw Object.assign(new Error('Firebase Admin not configured'), { status: 503 });
+  }
+  const token = authHeader.slice(7);
+  const decoded = await admin.auth().verifyIdToken(token);
+  return decoded.uid;
+}
+
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 // Health check (single definition)
@@ -85,12 +185,47 @@ app.get('/health', (_req, res) => {
     timestamp: new Date().toISOString(),
     regions: getAllSupportedRegions().map(r => r.code),
     version: '2.0.0',
+    stripe: !!stripe,
+    firebaseAdmin: !!firestore,
   });
 });
 
 // Supported regions list
 app.get('/regions', (_req, res) => {
   res.json(getAllSupportedRegions());
+});
+
+// Stripe — create lifetime Checkout Session (one-time payment, TEST MODE)
+app.post('/stripe/create-checkout-session', async (req, res) => {
+  try {
+    if (!stripe || !LIFETIME_PRICE_ID) {
+      return res.status(503).json({
+        error: 'Stripe not configured. Set STRIPE_SECRET_KEY and STRIPE_LIFETIME_PRICE_ID.',
+      });
+    }
+
+    const userId = await verifyFirebaseIdToken(req.headers.authorization);
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [{ price: LIFETIME_PRICE_ID, quantity: 1 }],
+      success_url: `${FRONTEND_URL}?checkout=success`,
+      cancel_url: `${FRONTEND_URL}?checkout=cancel`,
+      client_reference_id: userId,
+      metadata: { userId, product: 'lifetime' },
+      allow_promotion_codes: true,
+    });
+
+    if (!session.url) {
+      return res.status(500).json({ error: 'Stripe did not return a checkout URL' });
+    }
+
+    res.json({ url: session.url, sessionId: session.id });
+  } catch (error: any) {
+    const status = error?.status || 500;
+    console.error('[STRIPE] create-checkout-session error:', error);
+    res.status(status).json({ error: error?.message || 'Failed to create checkout session' });
+  }
 });
 
 // Discovery — real multi-source web discovery
@@ -262,6 +397,7 @@ app.listen(PORT, () => {
   console.log(`   Port:    ${PORT}`);
   console.log(`   Health:  http://localhost:${PORT}/health`);
   console.log(`   Regions: http://localhost:${PORT}/regions`);
+  console.log(`   Stripe:  ${stripe ? 'CONFIGURED' : 'NOT SET'}`);
   console.log(`   Headless: ${process.env.USE_HEADLESS_BROWSER !== 'false'}`);
   console.log(`   Proxy:   ${process.env.RESIDENTIAL_PROXY_API_KEY ? 'CONFIGURED' : 'NOT SET (geo-testing disabled)'}`);
   console.log('');
