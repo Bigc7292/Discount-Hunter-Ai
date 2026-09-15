@@ -5,10 +5,11 @@ import { motion, AnimatePresence, useMotionValue, useSpring } from 'framer-motio
 // --- FIREBASE IMPORTS ---
 import { auth, db } from './firebaseConfig';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, collection, addDoc, query as firestoreQuery, getDocs, orderBy } from 'firebase/firestore';
+import { doc, getDoc, collection, addDoc, query as firestoreQuery, getDocs, orderBy, serverTimestamp } from 'firebase/firestore';
 
 import { SearchStatus, SearchResult, LogEntry, User, CouponCode, InboxItem, HistoryEntry } from './types';
 import { runSearch } from './services/searchService';
+import { createLifetimeCheckoutSession } from './services/apiService';
 // nvidiaService is used internally by searchService — no direct import needed here
 import { subscribeToRecentSavings, formatSavingForTicker, RecentSaving } from './services/recentSavingsService';
 import TerminalLog from './components/TerminalLog';
@@ -193,15 +194,15 @@ export default function App() {
         return () => unsubscribe();
     }, []);
 
-    // Load User Inbox once when the user is available
+    // Load User Inbox + Search History once when the user is available
     useEffect(() => {
-        if (!user || !db) { setInbox([]); return; }
+        if (!user || !db) { setInbox([]); setSearchHistory([]); return; }
 
         const loadInbox = async () => {
             try {
                 const q = firestoreQuery(collection(db, "users", user.id, "inbox"), orderBy("savedAt", "desc"));
                 const snapshot = await getDocs(q);
-                const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InboxItem));
+                const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as InboxItem));
                 setInbox(items);
             } catch (error) {
                 console.info('Inbox unavailable:', error);
@@ -209,7 +210,57 @@ export default function App() {
             }
         };
 
+        const loadHistory = async () => {
+            try {
+                const q = firestoreQuery(collection(db, "users", user.id, "history"), orderBy("createdAt", "desc"));
+                const snapshot = await getDocs(q);
+                const items = snapshot.docs.map(d => {
+                    const data = d.data();
+                    return {
+                        id: d.id,
+                        query: data.query || '',
+                        merchant: data.merchant || '',
+                        resultCount: data.resultCount ?? 0,
+                        verifiedCount: data.verifiedCount,
+                        timestamp: data.timestamp || (data.createdAt?.toDate?.()?.toLocaleString?.() ?? ''),
+                    } as HistoryEntry;
+                });
+                setSearchHistory(items);
+            } catch (error) {
+                console.info('History unavailable:', error);
+                setSearchHistory([]);
+            }
+        };
+
         void loadInbox();
+        void loadHistory();
+    }, [user?.id]);
+
+    // After Stripe Checkout redirect (?checkout=success), refresh user profile from Firestore
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const checkout = params.get('checkout');
+        if (!checkout || !user || !db) return;
+
+        const refresh = async () => {
+            try {
+                const userDoc = await getDoc(doc(db, "users", user.id));
+                if (userDoc.exists()) {
+                    setUser({ ...userDoc.data(), id: user.id } as User);
+                }
+                if (checkout === 'success') {
+                    addLog('LIFETIME ACCESS CONFIRMED VIA STRIPE.', 'system');
+                }
+            } catch (error) {
+                console.error('Post-checkout refresh failed:', error);
+            } finally {
+                params.delete('checkout');
+                const next = `${window.location.pathname}${params.toString() ? `?${params}` : ''}${window.location.hash}`;
+                window.history.replaceState({}, '', next);
+            }
+        };
+        void refresh();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user?.id]);
 
     useEffect(() => { function handleClickOutside(event: MouseEvent) { if (langMenuRef.current && !langMenuRef.current.contains(event.target as Node)) { setIsLangMenuOpen(false); } } document.addEventListener("mousedown", handleClickOutside); return () => document.removeEventListener("mousedown", handleClickOutside); }, []);
@@ -217,8 +268,51 @@ export default function App() {
     const addLog = (message: string, type: LogEntry['type'] = 'info') => { setLogs(prev => [...prev, { id: Math.random().toString(36).substring(7), timestamp: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }), message, type }]); };
     const handleLogin = (loggedInUser: User) => { setIsAuthOpen(false); setUser(loggedInUser); };
     const handleLogout = async () => { try { await signOut(auth); setUser(null); setIsDashboardOpen(false); setDailySearchesUsed(0); addLog('SESSION TERMINATED.', 'system'); } catch (error) { console.error("Logout failed", error); } };
-    const handleUpgrade = () => { setIsPricingOpen(false); setTimeout(() => { if (user) { const upgradedUser: User = { ...user, plan: 'pro', dailySearchLimit: 1000, trialEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() }; setUser(upgradedUser); addLog('OPERATIVE UPGRADED TO HUNTER ELITE.', 'system'); setIsDashboardOpen(true); } else { setIsAuthOpen(true); } }, 500); };
-    const handleSaveCode = (code: CouponCode) => { if (!user) { setIsAuthOpen(true); return; } setInbox(prev => [{ id: Math.random().toString(36).substring(7), merchant: result?.merchantName || 'Unknown Store', code: code.code, description: code.description, savedAt: new Date().toLocaleDateString() }, ...prev]); };
+    const handleUpgrade = async () => {
+        if (!user) { setIsAuthOpen(true); return; }
+        if (!auth?.currentUser) { setIsAuthOpen(true); return; }
+        try {
+            addLog('INITIATING STRIPE LIFETIME CHECKOUT...', 'system');
+            const idToken = await auth.currentUser.getIdToken();
+            const { url } = await createLifetimeCheckoutSession(idToken);
+            setIsPricingOpen(false);
+            window.location.href = url;
+        } catch (error) {
+            console.error('Stripe checkout failed:', error);
+            addLog(`CHECKOUT FAILED: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+            throw error;
+        }
+    };
+
+    const handleSaveCode = async (code: CouponCode) => {
+        if (!user) { setIsAuthOpen(true); return; }
+        const savedAt = new Date().toLocaleDateString();
+        const payload = {
+            merchant: result?.merchantName || 'Unknown Store',
+            code: code.code,
+            description: code.description,
+            savedAt,
+            isVerified: code.isVerified,
+            status: code.status,
+            successRate: code.successRate,
+            discountAmount: code.discountAmount,
+            testedRegion: code.testedRegion,
+            createdAt: serverTimestamp(),
+        };
+
+        // Optimistic local update
+        const tempId = Math.random().toString(36).substring(7);
+        setInbox(prev => [{ id: tempId, ...payload, savedAt } as InboxItem, ...prev]);
+
+        if (!db) return;
+        try {
+            const ref = await addDoc(collection(db, "users", user.id, "inbox"), payload);
+            setInbox(prev => prev.map(item => item.id === tempId ? { ...item, id: ref.id } : item));
+        } catch (error) {
+            console.error('Failed to persist inbox item:', error);
+            addLog('INBOX PERSIST FAILED — CODE KEPT LOCALLY.', 'warning');
+        }
+    };
 
     const handleSearch = async (e?: React.FormEvent, overrideQuery?: string) => {
         if (e) e.preventDefault();
@@ -233,16 +327,42 @@ export default function App() {
         if (user) { setUser({ ...user, dailySearchesUsed: user.dailySearchesUsed + 1 }); }
 
         // Use the real search pipeline from searchService
+        let latestResult: SearchResult | null = null;
         await runSearch(
             activeQuery,
             searchLocation || 'US',
             user?.id || null,
             addLog,
             setStatus,
-            setResult,
+            (r) => { latestResult = r; setResult(r); },
             setInfluencerCodes,
             setGlitchStatus
         );
+
+        // Persist search history to Firestore (Firebase only)
+        if (user && db && latestResult) {
+            const entry = {
+                query: activeQuery,
+                merchant: latestResult.merchantName || activeQuery,
+                resultCount: latestResult.codes?.length ?? 0,
+                verifiedCount: latestResult.stats?.codesVerified ?? latestResult.codes?.length ?? 0,
+                timestamp: new Date().toLocaleString(),
+                createdAt: serverTimestamp(),
+            };
+            try {
+                const ref = await addDoc(collection(db, "users", user.id, "history"), entry);
+                setSearchHistory(prev => [{
+                    id: ref.id,
+                    query: entry.query,
+                    merchant: entry.merchant,
+                    resultCount: entry.resultCount,
+                    verifiedCount: entry.verifiedCount,
+                    timestamp: entry.timestamp,
+                }, ...prev]);
+            } catch (error) {
+                console.error('Failed to persist search history:', error);
+            }
+        }
     };
 
     // const handleCountrySelect = ... Removed
@@ -286,6 +406,8 @@ export default function App() {
                         onSaveCode={handleSaveCode}
                         influencerCodes={influencerCodes}
                         glitchStatus={glitchStatus}
+                        inboxItems={inbox}
+                        historyItems={searchHistory}
                     />
 
                     {/* Dashboard overlays (Portals) */}
