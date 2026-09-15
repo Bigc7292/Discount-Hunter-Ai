@@ -200,3 +200,25 @@ export async function discoverCodes(
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Stripe lifetime checkout — creates a TEST MODE Checkout Session via backend
+// ---------------------------------------------------------------------------
+
+export async function createLifetimeCheckoutSession(idToken: string): Promise<{ url: string }> {
+  const response = await fetch(`${API_BASE_URL}/stripe/create-checkout-session`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({}),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || `Checkout session failed: HTTP ${response.status}`);
+  }
+
+  return await response.json() as { url: string };
+}
