@@ -12,9 +12,9 @@ import { motion } from 'framer-motion';
 import HeroSearchBar from './HeroSearchBar';
 import RegionSelector from './RegionSelector';
 import TerminalLog from './TerminalLog';
-import { SearchStatus, SearchResult, LogEntry, CouponCode } from '../types';
+import { SearchStatus, SearchResult, LogEntry, CouponCode, InboxItem, HistoryEntry } from '../types';
 import ResultsDisplay from './ResultsDisplay';
-import { WifiOff } from 'lucide-react';
+import { WifiOff, Inbox, History, Copy } from 'lucide-react';
 
 interface DashboardWorkspaceProps {
   query: string;
@@ -29,6 +29,8 @@ interface DashboardWorkspaceProps {
   onSaveCode?: (code: CouponCode) => void;
   influencerCodes?: CouponCode[];
   glitchStatus?: { probability: number; warning?: string } | null;
+  inboxItems?: InboxItem[];
+  historyItems?: HistoryEntry[];
 }
 
 const DashboardWorkspace: React.FC<DashboardWorkspaceProps> = ({
@@ -44,6 +46,8 @@ const DashboardWorkspace: React.FC<DashboardWorkspaceProps> = ({
   onSaveCode,
   influencerCodes = [],
   glitchStatus,
+  inboxItems = [],
+  historyItems = [],
 }) => {
   const isSearching =
     status !== SearchStatus.IDLE &&
@@ -59,19 +63,36 @@ const DashboardWorkspace: React.FC<DashboardWorkspaceProps> = ({
             <h3 className="text-xl font-display font-black text-hunter-cyan mb-6 uppercase tracking-widest italic">
               MISSION HISTORY
             </h3>
-            <div className="cyber-glass border-hunter-border p-8 text-center rounded-xl">
-              <p className="text-hunter-muted font-mono text-sm">
+            <div className="cyber-glass border-hunter-border p-8 rounded-xl">
+              <p className="text-hunter-muted font-mono text-sm text-center mb-6">
                 ARCHIVE ACCESS ENABLED. VIEWING PAST EXTRACTIONS...
               </p>
-              <div className="mt-8 grid gap-4">
-                <div className="p-4 border border-hunter-border bg-black/40 rounded-lg flex justify-between items-center group hover:border-hunter-cyan/50 transition-all cursor-pointer">
-                  <div className="text-left">
-                    <div className="text-white font-mono text-xs">TARGET: NIKE.COM</div>
-                    <div className="text-hunter-muted text-[10px]">VERIFIED_EXTRACTION: 3 CODES</div>
-                  </div>
-                  <div className="text-hunter-cyan font-mono text-[10px]">2025-12-18</div>
+              {historyItems.length === 0 ? (
+                <div className="text-center py-8">
+                  <History size={32} className="mx-auto text-hunter-muted mb-2" />
+                  <p className="text-hunter-muted text-sm font-mono">No search history yet.</p>
                 </div>
-              </div>
+              ) : (
+                <div className="grid gap-4">
+                  {historyItems.map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      onClick={() => onSearch(entry.query)}
+                      className="p-4 border border-hunter-border bg-black/40 rounded-lg flex justify-between items-center group hover:border-hunter-cyan/50 transition-all cursor-pointer text-left w-full"
+                    >
+                      <div className="text-left">
+                        <div className="text-white font-mono text-xs">TARGET: {entry.merchant || entry.query}</div>
+                        <div className="text-hunter-muted text-[10px]">
+                          VERIFIED_EXTRACTION: {entry.verifiedCount ?? entry.resultCount} CODES
+                        </div>
+                        <div className="text-hunter-muted/70 text-[10px] mt-1 font-mono">{entry.query}</div>
+                      </div>
+                      <div className="text-hunter-cyan font-mono text-[10px] shrink-0 ml-4">{entry.timestamp}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         );
@@ -82,10 +103,41 @@ const DashboardWorkspace: React.FC<DashboardWorkspaceProps> = ({
             <h3 className="text-xl font-display font-black text-hunter-cyan mb-6 uppercase tracking-widest italic">
               SECURE INBOX
             </h3>
-            <div className="cyber-glass border-hunter-border p-8 text-center rounded-xl">
-              <p className="text-hunter-muted font-mono text-sm">
+            <div className="cyber-glass border-hunter-border p-8 rounded-xl">
+              <p className="text-hunter-muted font-mono text-sm text-center mb-6">
                 ENCRYPTED VAULT. ALL SAVED CODES STORED HERE.
               </p>
+              {inboxItems.length === 0 ? (
+                <div className="text-center py-8">
+                  <Inbox size={32} className="mx-auto text-hunter-muted mb-2" />
+                  <p className="text-hunter-muted text-sm font-mono">No saved codes yet.</p>
+                </div>
+              ) : (
+                <div className="grid gap-4">
+                  {inboxItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="p-4 border border-hunter-border bg-black/40 rounded-lg group hover:border-hunter-cyan/50 transition-all"
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="text-white font-mono text-xs">{item.merchant}</div>
+                        <div className="text-hunter-muted font-mono text-[10px]">{item.savedAt}</div>
+                      </div>
+                      <div className="bg-black/50 border border-hunter-border rounded px-3 py-2 flex items-center justify-between mb-2">
+                        <code className="text-hunter-cyan font-mono font-bold text-sm">{item.code}</code>
+                        <button
+                          type="button"
+                          onClick={() => navigator.clipboard.writeText(item.code)}
+                          className="text-hunter-muted hover:text-white transition-colors"
+                        >
+                          <Copy size={14} />
+                        </button>
+                      </div>
+                      <p className="text-xs text-hunter-muted font-mono">{item.description}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         );
