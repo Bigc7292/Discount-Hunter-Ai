@@ -202,7 +202,7 @@ export async function discoverCodes(
 }
 
 // ---------------------------------------------------------------------------
-// Influencer codes — social media promo codes (UNVERIFIED, display with disclaimer)
+// Influencer codes — internal social signals only (NEVER shown in UI as copyable codes)
 // ---------------------------------------------------------------------------
 
 export async function findInfluencerCodes(merchantName: string): Promise<CouponCode[]> {

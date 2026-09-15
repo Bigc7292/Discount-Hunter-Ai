@@ -1,13 +1,13 @@
 /**
  * ResultCard — Displays a single checkout-verified coupon code.
- * Only renders for codes that passed real checkout simulation.
+ * LAUNCH INVARIANT: returns null unless status === 'verified'.
  */
 
 import React, { useState } from 'react';
 import { CouponCode } from '../types';
 import {
   Copy, Check, ExternalLink, Clock, Bookmark, BookmarkCheck,
-  ShieldCheck, XCircle, AlertTriangle, Zap, MapPin, Timer, Globe
+  ShieldCheck, Zap, MapPin, Timer, Globe
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -21,9 +21,11 @@ const ResultCard: React.FC<ResultCardProps> = ({ code, rank, onSave }) => {
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const isVerified  = code.status === 'verified';
-  const isFailed    = code.status === 'failed' || code.status === 'expired';
-  const isUnverified = !isVerified && !isFailed;
+  // LAUNCH INVARIANT: never render untested/unverified codes in any UI path
+  if (code.status !== 'verified') {
+    return null;
+  }
+
 
   // ── Copy handler ──
   const handleCopy = () => {
@@ -61,53 +63,30 @@ const ResultCard: React.FC<ResultCardProps> = ({ code, rank, onSave }) => {
       className={`
         group relative bg-hunter-surface backdrop-blur-md border rounded-xl overflow-hidden
         transition-all duration-300 p-5
-        ${isVerified
-          ? 'border-hunter-green/40 hover:border-hunter-green/70 shadow-[0_4px_24px_-4px_rgba(10,255,0,0.15)] hover:shadow-[0_4px_32px_-4px_rgba(10,255,0,0.25)]'
-          : isFailed
-            ? 'border-red-500/20 opacity-55'
-            : 'border-yellow-500/20 hover:border-yellow-500/40'
-        }
-        ${rank === 0 && isVerified ? 'ring-1 ring-hunter-green/25' : ''}
+        border-hunter-green/40 hover:border-hunter-green/70 shadow-[0_4px_24px_-4px_rgba(10,255,0,0.15)] hover:shadow-[0_4px_32px_-4px_rgba(10,255,0,0.25)]
+        ${rank === 0 ? 'ring-1 ring-hunter-green/25' : ''}
       `}
     >
       {/* ── Corner bracket decoration ── */}
       <div className="absolute top-0 right-0 w-12 h-12 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
-        <svg viewBox="0 0 100 100" className={`w-full h-full stroke-current fill-none stroke-2 ${isVerified ? 'text-hunter-green/40' : 'text-hunter-muted/30'}`}>
+        <svg viewBox="0 0 100 100" className={`w-full h-full stroke-current fill-none stroke-2 'text-hunter-green/40'`}>
           <path d="M90,10 L70,10 M90,10 L90,30" />
         </svg>
       </div>
 
       {/* ── Status badge — top right ── */}
       <div className="absolute top-3 right-3 flex items-center gap-1.5">
-        {rank === 0 && isVerified && (
+        {rank === 0 && (
           <span className="bg-hunter-green text-black text-[9px] font-black px-1.5 py-0.5 rounded skew-x-[-8deg] tracking-wider">
             BEST
           </span>
         )}
-        {isVerified && (
-          <div className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider
-                          px-2 py-1 rounded border
-                          bg-hunter-green/10 border-hunter-green/30 text-hunter-green">
-            <ShieldCheck size={11} className="shrink-0" />
-            CHECKOUT VERIFIED
-          </div>
-        )}
-        {isFailed && (
-          <div className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider
-                          px-2 py-1 rounded border
-                          bg-red-500/10 border-red-500/30 text-red-400">
-            <XCircle size={11} className="shrink-0" />
-            FAILED
-          </div>
-        )}
-        {isUnverified && (
-          <div className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider
-                          px-2 py-1 rounded border
-                          bg-yellow-500/10 border-yellow-500/30 text-yellow-400">
-            <AlertTriangle size={11} className="shrink-0" />
-            UNVERIFIED
-          </div>
-        )}
+        <div className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider
+                        px-2 py-1 rounded border
+                        bg-hunter-green/10 border-hunter-green/30 text-hunter-green">
+          <ShieldCheck size={11} className="shrink-0" />
+          CHECKOUT VERIFIED
+        </div>
       </div>
 
       {/* ── Main content ── */}
@@ -118,29 +97,22 @@ const ResultCard: React.FC<ResultCardProps> = ({ code, rank, onSave }) => {
 
           {/* The code itself */}
           <div className="flex items-center gap-3 flex-wrap">
-            <h3 className={`
+            <h3 className="
               text-2xl md:text-3xl font-black font-mono tracking-wider
               transition-colors duration-200
-              ${isVerified
-                ? 'text-white group-hover:text-hunter-green'
-                : isFailed
-                  ? 'text-hunter-muted line-through'
-                  : 'text-yellow-200/70'
-              }
-            `}>
+              text-white group-hover:text-hunter-green
+            ">
               {code.code}
             </h3>
           </div>
 
           {/* Description */}
-          <p className={`text-sm font-medium leading-snug ${
-            isVerified ? 'text-hunter-cyan/80' : 'text-hunter-muted'
-          }`}>
+          <p className="text-sm font-medium leading-snug text-hunter-cyan/80">
             {code.description}
           </p>
 
           {/* Actual discount detected at checkout */}
-          {isVerified && (code.discountText || code.discountAmount) && (
+          {(code.discountText || code.discountAmount) && (
             <div className="flex items-center gap-2">
               <Zap size={12} className="text-hunter-green shrink-0" />
               <span className="text-xs font-mono text-hunter-green font-bold">
@@ -163,7 +135,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ code, rank, onSave }) => {
                 {code.source}
               </div>
             )}
-            {code.testedRegion && isVerified && (
+            {code.testedRegion && (
               <div className="flex items-center gap-1 text-hunter-cyan/70">
                 <MapPin size={11} />
                 Tested in {code.testedRegion}
@@ -175,7 +147,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ code, rank, onSave }) => {
                 Region: {code.regionDisplay}
               </div>
             )}
-            {code.responseTime && isVerified && (
+            {code.responseTime && (
               <div className="flex items-center gap-1 text-hunter-muted/50">
                 <Timer size={11} />
                 {(code.responseTime / 1000).toFixed(1)}s
@@ -197,21 +169,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ code, rank, onSave }) => {
             </span>
           </div>
 
-          {/* Error detail for failed or unverified codes */}
-          {(isFailed || isUnverified) && code.errorMessage && (
-            <div className={`flex items-center gap-1.5 text-[10px] font-mono ${isFailed ? 'text-red-400/70' : 'text-yellow-400/70'}`}>
-              {isFailed ? <XCircle size={10} /> : <AlertTriangle size={10} />}
-              {code.errorMessage}
-            </div>
-          )}
 
-          {/* Unverified disclaimer */}
-          {isUnverified && (
-            <div className="flex items-center gap-1.5 text-[10px] text-yellow-400/70 font-mono">
-              <AlertTriangle size={10} />
-              Not tested at checkout — use at your own risk
-            </div>
-          )}
         </div>
 
         {/* RIGHT — Actions */}
@@ -220,37 +178,30 @@ const ResultCard: React.FC<ResultCardProps> = ({ code, rank, onSave }) => {
           {/* Copy / Extract button */}
           <button
             onClick={handleCopy}
-            disabled={isFailed}
             className={`
               flex items-center justify-center gap-2 px-5 py-3 font-black font-display
               rounded-xl transition-all duration-200 active:scale-95 text-sm min-w-[130px]
-              ${isFailed
-                ? 'bg-hunter-surface text-hunter-muted cursor-not-allowed border border-hunter-border'
-                : isVerified
-                  ? copied
-                    ? 'bg-hunter-green text-black border border-hunter-green'
-                    : 'bg-hunter-cyan/10 border border-hunter-cyan/40 text-hunter-cyan hover:bg-hunter-green hover:text-black hover:border-hunter-green'
-                  : 'bg-yellow-500/10 border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500 hover:text-black'
+              ${copied
+                ? 'bg-hunter-green text-black border border-hunter-green'
+                : 'bg-hunter-cyan/10 border border-hunter-cyan/40 text-hunter-cyan hover:bg-hunter-green hover:text-black hover:border-hunter-green'
               }
             `}
-            title={isFailed ? 'Code failed at checkout' : 'Copy code to clipboard'}
+            title="Copy code to clipboard"
           >
             {copied ? <Check size={16} className="shrink-0" /> : <Copy size={16} className="shrink-0" />}
-            <span>{copied ? 'COPIED!' : isFailed ? 'INVALID' : 'COPY CODE'}</span>
+            <span>{copied ? 'COPIED!' : 'COPY CODE'}</span>
           </button>
 
           {/* Save / Archive button */}
           <button
             onClick={handleSave}
-            disabled={saved || isFailed}
+            disabled={saved}
             className={`
               flex items-center justify-center gap-2 px-4 py-3 border rounded-xl
               transition-all duration-200 font-bold font-display text-sm
               ${saved
                 ? 'bg-hunter-green/15 border-hunter-green/50 text-hunter-green cursor-default'
-                : isFailed
-                  ? 'border-hunter-border text-hunter-muted cursor-not-allowed opacity-40'
-                  : 'border-hunter-border text-hunter-muted hover:bg-hunter-cyan/10 hover:text-hunter-cyan hover:border-hunter-cyan/40'
+                : 'border-hunter-border text-hunter-muted hover:bg-hunter-cyan/10 hover:text-hunter-cyan hover:border-hunter-cyan/40'
               }
             `}
             title={saved ? 'Saved to inbox' : 'Save to inbox'}

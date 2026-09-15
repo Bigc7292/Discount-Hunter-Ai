@@ -3,10 +3,11 @@
  *
  * Pipeline: Health Check → Discovery (NVIDIA AI) → Verification (Backend/Puppeteer) → Display
  *
- * STRICT RULES:
+ * STRICT RULES / LAUNCH INVARIANT:
  * 1. If the verifier backend is offline → HARD STOP. Zero codes shown. Never fallback.
  * 2. Only codes with status === 'verified' (confirmed at real checkout) are returned.
- * 3. Discovery codes that fail or are unverified are SILENTLY DROPPED — never shown.
+ * 3. Discovery codes that fail or are unverified are SILENTLY DROPPED — never shown in any UI path.
+ * 4. Influencer/social signals stay internal — never surfaced as copyable codes.
  */
 
 import { CouponCode, SearchResult, SearchStatus, LogEntry } from '../types';
@@ -264,43 +265,9 @@ export async function runSearch(
         };
       });
 
-    // Map codes that failed verification or couldn't be tested (e.g. error / expired)
-    const unverifiedCodes: CouponCode[] = allResults
-      .filter(r => r.status !== 'verified')
-      .map(r => {
-        const discCand = toVerify.find(c => c.code === r.code);
-        return {
-          code: r.code,
-          description: r.codeDescription || discCand?.description || 'Discovered from live web sources',
-          successRate: r.confidence || 20,
-          lastVerified: 'Recently tested',
-          source: r.source || discCand?.source || 'AI Discovery',
-          isVerified: false,
-          status: r.status,
-          testedRegion: r.testedRegion,
-          testedAt: r.testedAt,
-          errorMessage: r.errorMessage || 'Failed at checkout',
-          likelyRegion: discCand?.likelyRegion,
-          regionDisplay: discCand?.regionDisplay,
-        };
-      });
-
-    // Map remaining discovered codes that were not tested (due to batch limits)
-    const untestedCodes: CouponCode[] = discovered
-      .slice(toVerify.length)
-      .map(c => ({
-        code: c.code,
-        description: c.description || 'Discovered from live web sources',
-        successRate: c.discoveryConfidence || 35,
-        lastVerified: 'Discovered',
-        source: c.source || 'AI Discovery',
-        isVerified: false,
-        status: 'unverified' as const,
-        likelyRegion: c.likelyRegion,
-        regionDisplay: c.regionDisplay,
-      }));
-
-    const mergedUnverified = [...unverifiedCodes, ...untestedCodes];
+    // Unverified / untested candidates are NEVER mapped into UI payloads (verify-only invariant).
+    // Counts only — no code strings returned for display.
+    const untestedCount = Math.max(0, discovered.length - toVerify.length);
 
     const failedCount = allResults.filter(r =>
       r.status === 'failed' || r.status === 'expired' || r.status === 'error'
@@ -318,8 +285,8 @@ export async function runSearch(
       addLog(`${failedCount} CODE${failedCount !== 1 ? 'S' : ''} REJECTED AT CHECKOUT`, 'info');
     }
 
-    if (untestedCodes.length > 0) {
-      addLog(`${untestedCodes.length} DISCOVERED CODE${untestedCodes.length !== 1 ? 'S' : ''} NOT TESTED (CAPPED)`, 'info');
+    if (untestedCount > 0) {
+      addLog(`${untestedCount} DISCOVERED CODE${untestedCount !== 1 ? 'S' : ''} NOT TESTED (CAPPED)`, 'info');
     }
 
     // Estimated savings from actual discount amounts detected
@@ -340,9 +307,8 @@ export async function runSearch(
     setResult({
       merchantName: discovery.merchantName,
       merchantUrl: discovery.merchantUrl,
-      codes: verifiedCodes,
-      unverifiedCodes: mergedUnverified,
-      unverifiedCount: failedCount + unverifiedCount + untestedCodes.length,
+      codes: verifiedCodes, // ONLY status === 'verified'
+      unverifiedCount: failedCount + unverifiedCount + untestedCount,
       competitors: discovery.competitors,
       verifierOnline: true,
       stats: {
@@ -363,14 +329,15 @@ export async function runSearch(
       addLog('MISSION COMPLETE: 0 codes survived checkout testing — no fake codes returned', 'warning');
     }
 
-    // ─── PHASE 4: SOCIAL LAYER (additive, non-blocking) ─────────────────────
-    // Influencer codes and glitch detection run in background.
-    // These are SUPPLEMENTARY and clearly labelled as unverified in the UI.
+    // ─── PHASE 4: INTERNAL SIGNALS (non-blocking, never shown as codes) ─────
+    // Social/influencer candidates stay internal — never passed to results UI.
+    // Glitch warnings may surface (they do not contain copyable codes).
+    setInfluencerCodes([]);
     if (discovery.merchantName) {
       findInfluencerCodes(discovery.merchantName).then(codes => {
         if (codes.length > 0) {
-          setInfluencerCodes(codes);
-          addLog(`SOCIAL LAYER: ${codes.length} INFLUENCER CODE${codes.length !== 1 ? 'S' : ''} DETECTED (UNVERIFIED)`, 'info');
+          // Log count only — do NOT setInfluencerCodes (verify-only invariant)
+          addLog(`SOCIAL LAYER: ${codes.length} SIGNAL${codes.length !== 1 ? 'S' : ''} (INTERNAL ONLY — NOT SHOWN)`, 'info');
         }
       }).catch(() => {});
 
