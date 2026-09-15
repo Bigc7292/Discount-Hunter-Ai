@@ -33,7 +33,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, onLogout, use
                     <div className="flex-1 overflow-hidden">
                         <div className="text-sm font-bold text-white truncate">{user.email}</div>
                         <div className="flex items-center gap-1.5">
-                            {user.plan === 'pro' ? (
+                            {user.plan === 'pro' || user.plan === 'lifetime' ? (
                                 <span className="text-[9px] text-hunter-cyan font-bold tracking-widest flex items-center gap-1">
                                     <Crown size={8} /> PRO
                                 </span>
