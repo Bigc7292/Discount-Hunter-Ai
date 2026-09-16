@@ -91,7 +91,7 @@ export interface User {
   id: string;
   email: string;
   role: 'user' | 'admin';
-  plan: 'free' | 'pro';
+  plan: 'free' | 'pro' | 'lifetime';
   searchCount: number;
   dailySearchesUsed: number;
   dailySearchLimit: number;
@@ -102,6 +102,8 @@ export interface User {
   isVerified: boolean;
   referredBy?: string;
   trialEndsAt?: string;
+  stripeCustomerId?: string;
+  lifetimePurchasedAt?: string;
 }
 
 export interface PricingTier {
