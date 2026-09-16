@@ -55,7 +55,7 @@ const firestore = initFirebaseAdmin();
 
 const stripeSecret = process.env.STRIPE_SECRET_KEY || '';
 const stripe = stripeSecret
-  ? new Stripe(stripeSecret, { apiVersion: '2024-11-20.acacia' })
+  ? new Stripe(stripeSecret, { apiVersion: '2025-02-24.acacia' })
   : null;
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
