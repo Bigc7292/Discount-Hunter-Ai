@@ -1,11 +1,17 @@
-# 🏗️ Technical Architecture & Data Flow: Hunter Protocol
+# Technical Architecture & Data Flow: Hunter Protocol
 
-This document details the inner workings of Discount Hunter AI. It is designed to help developers (and AI assistants) understand the SaaS-style conversion funnel and the new "Hunter Protocol" center-focused architecture.
+This document describes Discount Hunter AI’s conversion funnel and UI hierarchy.  
+**Reality check**: launch features on [PR #1](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/1)–[#4](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/4) are **on PR branches / pending merge** — not assumed present on `main`.
+
+**Invariant**: never surface untested/unverified codes (UI enforcement: PR #4, pending merge).  
+**Data**: Firebase Auth + Firestore only (no Supabase).  
+**Bot email**: AgentMail `discount-hunter@agentmail.to` only (PR #3, pending merge).
 
 ## 1. The SaaS Conversion Funnel
-The application is structured as a two-stage funnel:
-1.  **Public Layer (`LandingPage`)**: High-energy Cyber-Tech hero section designed to convert visitors into operatives. No search inputs are available here.
-2.  **Authenticated Layer (`DashboardWorkspace`)**: The central hub for authenticated operatives. Features a center-focused search interface and terminal logging.
+1. **Public Layer (`LandingPage`)**: Marketing / conversion. Optional Verified Checkout Ledger surface lands with PR #2 (pending merge).
+2. **Authenticated Layer (`DashboardWorkspace`)**: Search, terminal log, results, inbox/history (Firestore persist on PR #1, pending merge).
+
+**Monetisation**: optional $49 LTD Stripe Checkout (PR #1, pending merge). Longer-term research: freemium + ~$24/yr primary.
 
 ## 2. Component Hierarchy
 
@@ -26,21 +32,24 @@ graph TD
     Sidebar --> UserProfile
 ```
 
-## 3. The "Hunter Protocol" Search Pipeline
-The core functionality follows a personality-driven sequence:
+Pricing / Stripe modal and ledger components ship on PR #1 / #2 branches (pending merge).
 
-1.  **Deployment**: Operative enters a target (Merchant URL/Name) and optional Location.
-2.  **Breach (Planning)**: Gemini AI identifies the target and maps the extraction route.
-3.  **Raid (Scanning)**: The system simulates "raiding" shadow networks and Discord voids.
-4.  **Extraction (Validation)**: Artificial intelligence verifies code validity with high confidence.
-5.  **Exfiltration (Result)**: Validated codes are presented in the central workspace and archived to the user's Inbox.
+## 3. Search Pipeline (current intent)
+1. **Deploy**: Operative enters merchant + optional location.
+2. **Discover**: NVIDIA NIM + backend discovery return **candidates** (not user-facing alone).
+3. **Verify**: Backend checkout simulation (Puppeteer ± geo proxies).
+4. **Display**: **Verified-only** results (PR #4 pending merge) — no unverified/social codes in UI.
+5. **Persist**: Inbox / history via Firestore when PR #1 merges; AgentMail for merchant OTP stub when PR #3 merges.
 
 ## 4. UI/UX: Cyber-Tech Aesthetic
-The app uses a strict "Cyber-Tech" design system defined in `src/index.css`:
-*   **Colors**: Hunter Surface (`#0A0A0F`), Neon Cyan (`#00F0FF`), Neon Purple (`#A855F7`).
-*   **Utilities**: `cyber-glass` (backdrop blur + neon border), `cyber-grid` (retro background grid), `animate-scan` (moving scanning line).
-*   **Animations**: Framer Motion is used for all transitions, emphasizing "deployment" and "glitch" effects.
+Defined in `src/index.css`:
+* **Colors**: Hunter Surface (`#0A0A0F`), Neon Cyan (`#00F0FF`), Neon Purple (`#A855F7`).
+* **Utilities**: `cyber-glass`, `cyber-grid`, `animate-scan`.
+* **Animations**: Framer Motion for transitions / glitch effects.
 
 ## 5. State Management
-*   **Active Tab**: Controls the main content area in the `DashboardWorkspace` (Overview, Inbox, History, Account).
-*   **Hunter Personality**: Logs are injected with "Aggressive AI" terminology (e.g., "RAIDING", "TARGET COMPROMISED").
+* **Active Tab**: Overview, Inbox, History, Account in `DashboardWorkspace`.
+* **Auth / profile**: Firebase; lifetime entitlement fields arrive with PR #1 (pending merge).
+* **Shipping**: `gh` only — CloudAgent unavailable on plan.
+
+See [AGENTS.md](./AGENTS.md) for service diagram and env key names; [MIGRATION_TODO.md](./MIGRATION_TODO.md) for DoD checklist.

@@ -1,38 +1,35 @@
+# Launch / DoD checklist
 
-# 🚀 Backend Migration Checklist
+Stale “CodeSniper demo → production” steps removed. This checklist matches **live launch PRs** and Definition of Done. Features below are **on PR branches / pending merge** unless noted.
 
-Follow this list to switch CodeSniper from "Demo Mode" to "Production Mode".
+**Stack**: Firebase only (Auth + Firestore). No Supabase.  
+**Shipping**: `gh` PRs (CloudAgent unavailable on plan).  
+**Invariant**: never surface untested/unverified codes in the UI.
 
-## Phase 1: Authentication
-- [ ] **Install Firebase SDK**: Run `npm install firebase` in your terminal.
-- [ ] **Update AuthModal.tsx**:
-  - Replace the mock `setTimeout` login with:
-    ```typescript
-    import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
-    import { auth } from '../firebaseConfig';
-    ```
-  - In `handleSubmit`, call `signInWithEmailAndPassword(auth, email, password)`.
-- [ ] **Handle Global User State**:
-  - In `App.tsx`, use the `onAuthStateChanged` hook from Firebase to detect if a user is logged in automatically when the page loads.
+## A. Open launch PRs (merge when green)
 
-## Phase 2: User Data (Profile)
-- [ ] **Create User Document**:
-  - When a user signs up, use `setDoc` to create a record in the `users` collection in Firestore.
-  - Save their `referralCode` and `plan` there.
-- [ ] **Fetch User Data**:
-  - In `Dashboard.tsx`, instead of using `user` from props, fetch the live data using `getDoc(db, 'users', userId)`.
+- [ ] **PR [#1](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/1)** — Stripe $49 LTD + Firestore inbox/history  
+  - Owner: configure secrets smoke (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_LIFETIME_PRICE_ID`, `VITE_STRIPE_PUBLISHABLE_KEY`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `FRONTEND_URL`)
+  - Confirm Checkout + webhook → lifetime entitlement; inbox/history persist for signed-in users
+- [ ] **PR [#2](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/2)** — Verified Checkout Ledger + rate limits  
+  - Keys: `RATE_LIMIT_VERIFY_PER_MIN`, `RATE_LIMIT_DISCOVER_PER_MIN`, `RATE_LIMIT_USER_PER_MIN`, `LEDGER_MEMORY_MAX`, optional `FIREBASE_SERVICE_ACCOUNT_JSON`
+  - Confirm ledger only records verified outcomes; limits hit expected 429s
+- [ ] **PR [#3](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/3)** — AgentMail OTP stub  
+  - Keys: `AGENTMAIL_INBOX_EMAIL=discount-hunter@agentmail.to`, `AGENTMAIL_API_KEY` (server-only)
+  - **Never** wire personal email as bot inbox
+- [ ] **PR [#4](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/4)** — Verify-only UI  
+  - UI shows verified codes only; no unverified / social-only codes
 
-## Phase 3: The Features
-- [ ] **Saving Codes (Inbox)**:
-  - In `handleSaveCode` inside `App.tsx`:
-  - Change `setInbox(...)` to `addDoc(collection(db, 'inbox'), { ...data })`.
-- [ ] **Search History**:
-  - When a search finishes, save the result to a `history` collection linked to the user's ID.
+## B. DoD gates (before calling launch “done”)
 
-## Phase 4: Security (The Final Step)
-- [ ] **Rules**: Go to Firestore Console > Rules.
-- [ ] Change `allow read, write: if true;` to:
-    ```
-    allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
-    ```
-  (This ensures users can only see their own data).
+- [ ] Merge order agreed; conflicts resolved against `main` without regressing verify-only
+- [ ] Production Firebase rules: user-scoped inbox/history; public ledger read only if intentional (see PR #2 rules)
+- [ ] No unverified codes reachable from Results / cards / social paths
+- [ ] Bot email remains AgentMail-only
+- [ ] Stripe LTD optional path smoke-tested in **test mode** (PR #1); freemium + ~$24/yr deferred (research recommendation — not this launch)
+
+## C. Explicitly out of scope for this launch docs sync
+
+- Inventing that PR #1–#4 are already on `main`
+- Supabase or non-Firebase backends
+- CloudAgent-based deploy (unavailable — use `gh`)

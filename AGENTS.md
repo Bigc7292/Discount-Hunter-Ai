@@ -1,20 +1,38 @@
 # Discount Hunter AI - Technical Architecture
 
 ## Overview
-A SaaS platform that discovers REAL discount codes and verifies them through actual checkout simulation before presenting to users. Zero mock data.
+A SaaS platform that discovers REAL discount codes and verifies them through checkout simulation before presenting to users.
 
-## Tech Stack Changes
+**Launch invariant**: never surface untested/unverified codes in the UI.  
+Enforce path is on [PR #4](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/4) (`feat/verify-only-ui`) — **on PR branch / pending merge**. Do not assume it is on `main` yet.
+
+**Auth / data**: Firebase only (no Supabase).  
+**Bot email**: AgentMail `discount-hunter@agentmail.to` only — never personal ([PR #3](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/3), pending merge).
+
+## Open launch PRs (pending merge — not on `main`)
+
+| PR | Summary |
+|----|---------|
+| [#1](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/1) | Stripe $49 LTD + Firestore inbox/history (pending owner secrets smoke) |
+| [#2](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/2) | Verified Checkout Ledger + rate limits |
+| [#3](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/3) | AgentMail OTP stub (`discount-hunter@agentmail.to`) |
+| [#4](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/4) | Verify-only UI (no unverified/social codes) |
+
+**Monetisation**: $49 LTD optional on PR #1; research recommends freemium + ~$24/yr as primary later.  
+**Shipping**: via `gh` (CloudAgent unavailable on plan).
+
+## Tech Stack
 
 ### Was (Problematic)
 - **Gemini 3 Pro** - Expensive ($10/M output tokens)
 - **Simulated verification** - All codes marked "VERIFIED" without real testing
 - **Fake success rates** - Hardcoded 100% successRate
 
-### Now (Real)
-- **NVIDIA NIM** - **FREE** tier available (no credit card required)
-- **meta/llama-3.3-70b-instruct** via NVIDIA API
-- **Real verification** - Headless browser tests codes against actual checkout
-- **Real confidence scores** - Based on actual test results
+### Now (Real / target)
+- **NVIDIA NIM** - free tier available (`meta/llama-3.3-70b-instruct`)
+- **Real verification** - headless browser tests codes against checkout
+- **Real confidence scores** - based on actual test results
+- **Verify-only UI** - pending merge on PR #4
 
 ## Architecture
 
@@ -22,6 +40,7 @@ A SaaS platform that discovers REAL discount codes and verifies them through act
 ┌─────────────────────────────────────────────────────────────┐
 │                      FRONTEND (Vite/React)                  │
 │  HeroSearchBar → DashboardWorkspace → ResultsDisplay       │
+│  (verify-only display: PR #4 — pending merge)               │
 └─────────────────────────────────┬───────────────────────────┘
                                   │
                                   ▼
@@ -40,37 +59,33 @@ A SaaS platform that discovers REAL discount codes and verifies them through act
 │ • findInfluencer()  │                     │ • Real checkout test│
 │ • checkGlitch()     │                     │ • Geo-proxy testing  │
 │                     │                     │                     │
-│ Uses NVIDIA NIM      │                     │ Uses Puppeteer +    │
-│ OpenAI-compatible   │                     │ Residential Proxies  │
+│ Uses NVIDIA NIM      │                     │ Puppeteer + proxies │
 └─────────────────────┘                     └──────────┬──────────┘
                                                         │
-                              ┌────────────────────────┼────────────────────────┐
-                              ▼                        ▼                        ▼
-                     ┌──────────────┐          ┌──────────────┐          ┌──────────────┐
-                     │  US Region   │          │  UAE Region   │          │  UK Region   │
-                     │  (Proxies)   │          │  (Proxies)    │          │  (Proxies)   │
-                     └──────────────┘          └──────────────┘          └──────────────┘
+                     ┌──────────────────────────────────┼────────────────────────┐
+                     ▼                                  ▼                        ▼
+            ┌──────────────┐                   ┌──────────────┐          ┌──────────────┐
+            │  US Region   │                   │  UAE Region  │          │  UK Region   │
+            └──────────────┘                   └──────────────┘          └──────────────┘
 ```
+
+Pending on PR branches (not `main`): Stripe + Firestore persist (PR #1), checkout ledger + rate limits (PR #2), AgentMail client (PR #3).
 
 ## Pipeline Flow
 
-### 1. Discovery Phase (NVIDIA NIM)
-- AI scans for codes from real sources (Reddit, forums, official sites)
-- Returns candidate codes with source attribution
-- No verification yet - just discovery
+### 1. Discovery Phase (NVIDIA NIM + backend discovery)
+- AI / scrapers find candidate codes with source attribution
+- Candidates are **not** user-facing until verified
 
 ### 2. Verification Phase (Backend)
-- **REAL** headless browser automation (Puppeteer)
-- Simulates checkout flow with test cart
-- Tests from user's geo-region using residential proxies
-- Each code gets tested: verified | failed | expired | error
-- Confidence score based on actual test results
+- Headless browser automation (Puppeteer)
+- Checkout flow with test cart; geo via residential proxies when configured
+- Outcomes: verified | failed | expired | error
 
 ### 3. Display Phase (Frontend)
-- Shows ONLY codes that passed verification
-- Real confidence scores (not 100% fake)
-- Shows which region code was tested in
-- Transparent about which codes are unverified
+- **Target / PR #4**: show ONLY codes that passed verification
+- Real confidence scores; show region tested
+- Do **not** surface unverified or social-only codes in UI (launch invariant)
 
 ## Key Files
 
@@ -78,33 +93,28 @@ A SaaS platform that discovers REAL discount codes and verifies them through act
 discount-hunter-ai/
 ├── src/
 │   ├── services/
-│   │   ├── nvidiaService.ts    # AI discovery (NVIDIA NIM, FREE)
-│   │   ├── searchService.ts     # Pipeline orchestrator (NEW)
-│   │   ├── apiService.ts        # Backend communication (NEW)
-│   │   └── recentSavingsService.ts # Firebase integration (NEW)
-│   ├── components/             # UI Components
-│   ├── types.ts                 # Updated with real verification types
-│   └── App.tsx                  # Main application
-│
-├── backend/                     # NEW - Verification backend
+│   │   ├── nvidiaService.ts
+│   │   ├── searchService.ts
+│   │   ├── apiService.ts
+│   │   └── recentSavingsService.ts
+│   ├── components/
+│   ├── types.ts
+│   └── App.tsx
+├── backend/
 │   ├── src/
-│   │   ├── index.ts            # Express server
-│   │   ├── verifier.ts         # Real code verification
-│   │   ├── browserBot.ts       # Puppeteer headless testing
-│   │   ├── geoProxy.ts         # Geo-location proxy rotation
+│   │   ├── index.ts
+│   │   ├── verifier.ts
+│   │   ├── browserBot.ts
+│   │   ├── geoProxy.ts
+│   │   ├── ledger.ts          # PR #2 — pending merge
+│   │   ├── rateLimit.ts       # PR #2 — pending merge
+│   │   ├── agentMailClient.ts # PR #3 — pending merge
 │   │   └── discovery/
-│   │       ├── orchestrator.ts # Main discovery engine
-│   │       ├── serperService.ts # Google search (Serper)
-│   │       ├── jinaService.ts   # Coupon page scraper
-│   │       ├── zernioService.ts # Reddit/social media
-│   │       ├── tavilyService.ts # AI web search
-│   │       ├── firecrawlService.ts # Content cleanup
-│   │       └── codeExtractor.ts # Code extraction logic
-│   │   └── types.ts
 │   └── package.json
-│
-├── .env.example                 # Updated with NVIDIA keys
-└── AGENTS.md                   # This file
+├── .env.example
+├── AGENTS.md
+├── ARCHITECTURE.md
+└── MIGRATION_TODO.md          # DoD checklist tied to open PRs
 ```
 
 ## Confidence Scoring (Real)
@@ -114,48 +124,77 @@ discount-hunter-ai/
 | 86-100% | Recently tested & confirmed working |
 | 61-85% | Multiple recent verifications |
 | 31-60% | Community reports suggest works |
-| 0-30% | Single source, unverified |
+| 0-30% | Single source, unverified (must not be shown in UI once PR #4 merges) |
 
-## Environment Setup
+## Environment Setup (key names only)
 
-### Frontend (.env)
+### Frontend (`.env`) — on `main`
 ```env
-VITE_NVIDIA_API_KEY=your_key
+VITE_NVIDIA_API_KEY=
 VITE_VERIFIER_API_URL=http://localhost:3001
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_APP_ID=
 ```
 
-### Backend (.env)
+### Frontend — PR #1 pending merge
+```env
+VITE_STRIPE_PUBLISHABLE_KEY=
+```
+
+### Backend (`.env`) — on `main` (+ common)
 ```env
 PORT=3001
-RESIDENTIAL_PROXY_API_KEY=optional_but_recommended
+GEMINI_API_KEY=
+RESIDENTIAL_PROXY_API_KEY=
+RESIDENTIAL_PROXY_PROVIDER=brightdata
+USE_HEADLESS_BROWSER=true
+BROWSER_TIMEOUT_MS=30000
+REDIS_URL=redis://localhost:6379
+LOG_LEVEL=info
+```
+
+### Backend — pending merge (PR branches)
+```env
+# PR #1
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_LIFETIME_PRICE_ID=
+FRONTEND_URL=http://localhost:5173
+FIREBASE_SERVICE_ACCOUNT_JSON=
+
+# PR #2
+RATE_LIMIT_VERIFY_PER_MIN=10
+RATE_LIMIT_DISCOVER_PER_MIN=20
+RATE_LIMIT_USER_PER_MIN=10
+LEDGER_MEMORY_MAX=500
+
+# PR #3 — AgentMail only, never personal
+AGENTMAIL_INBOX_EMAIL=discount-hunter@agentmail.to
+AGENTMAIL_API_KEY=
 ```
 
 ## Running Locally
 
 ```bash
-# Terminal 1: Backend (Verifier)
-cd backend
-npm install
-npm run dev
+# Terminal 1: Backend
+cd backend && npm install && npm run dev
 
 # Terminal 2: Frontend
-npm install
-npm run dev
+npm install && npm run dev
 ```
 
 ## Deployment
 
-### Backend (Vercel/Node hosting or stay local)
-- The verifier needs to run 24/7
-- Consider: Railway, Render, DigitalOcean App Platform
-- Or: Keep localhost and use ngrok for dev
-
-### Frontend (Vercel)
-- Already deployed at discounthunterai.xyz
-- Just needs env vars updated
+- Frontend: Vercel (discounthunterai.xyz) — env keys via host secrets
+- Backend: Node host (e.g. Railway) — verifier should run continuously
+- Ship changes with `gh` PRs; CloudAgent unavailable on current plan
 
 ## Notes
 
-- MiniMax is 10-20x cheaper than Gemini
-- Real verification requires residential proxies for geo-targeting
-- Without proxies, verification still works but without geo-specific results
+- Real verification benefits from residential proxies for geo-targeting
+- Without proxies, verification still runs but without geo-specific results
+- See [MIGRATION_TODO.md](./MIGRATION_TODO.md) for DoD gates before launch
