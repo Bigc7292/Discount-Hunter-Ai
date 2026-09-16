@@ -27,7 +27,6 @@ interface DashboardWorkspaceProps {
   result: SearchResult | null;
   activeTab: 'overview' | 'inbox' | 'history' | 'account' | 'admin';
   onSaveCode?: (code: CouponCode) => void;
-  influencerCodes?: CouponCode[];
   glitchStatus?: { probability: number; warning?: string } | null;
   inboxItems?: InboxItem[];
   historyItems?: HistoryEntry[];
@@ -44,7 +43,6 @@ const DashboardWorkspace: React.FC<DashboardWorkspaceProps> = ({
   result,
   activeTab,
   onSaveCode,
-  influencerCodes = [],
   glitchStatus,
   inboxItems = [],
   historyItems = [],
@@ -240,7 +238,6 @@ const DashboardWorkspace: React.FC<DashboardWorkspaceProps> = ({
               <ResultsDisplay
                 result={result}
                 onSaveCode={onSaveCode || (() => {})}
-                influencerCodes={influencerCodes}
                 glitchStatus={glitchStatus}
               />
             )}

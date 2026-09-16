@@ -1,5 +1,6 @@
 /**
  * ResultsDisplay — Shows ONLY checkout-verified codes.
+ * LAUNCH INVARIANT: Never surface untested/unverified codes in any UI path.
  * Every code displayed here has been confirmed working at a real checkout.
  */
 
@@ -8,24 +9,24 @@ import { SearchResult, CouponCode } from '../types';
 import ResultCard from './ResultCard';
 import { motion } from 'framer-motion';
 import {
-  ExternalLink, ShoppingCart, Globe, Zap, AlertTriangle,
+  ExternalLink, ShoppingCart, Globe, Zap,
   ShieldCheck, WifiOff, XCircle
 } from 'lucide-react';
 
 interface ResultsDisplayProps {
   result: SearchResult;
   onSaveCode: (code: CouponCode) => void;
-  influencerCodes?: CouponCode[];
   glitchStatus?: { probability: number; warning?: string } | null;
 }
 
 const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
   result,
   onSaveCode,
-  influencerCodes = [],
   glitchStatus,
 }) => {
-  const verifiedCount = result.codes.length;
+  // Defensive: primary list renders ONLY checkout-verified codes
+  const verifiedCodes = result.codes.filter((c) => c.status === 'verified');
+  const verifiedCount = verifiedCodes.length;
   const testedCount = result.stats.codesTested || 0;
   const discoveredCount = result.stats.codesDiscovered || result.stats.sourcesScanned || 0;
   const isVerifierOffline = !result.verifierOnline;
@@ -146,7 +147,7 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
 
         {verifiedCount > 0 ? (
           <div className="grid gap-4">
-            {result.codes.map((code, idx) => (
+            {verifiedCodes.map((code, idx) => (
               <ResultCard
                 key={`${code.code}-${idx}`}
                 code={code}
@@ -175,70 +176,12 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
             </div>
             {result.unverifiedCount !== undefined && result.unverifiedCount > 0 && (
               <p className="text-hunter-muted/50 text-[10px] font-mono mt-4">
-                {result.unverifiedCount} code{result.unverifiedCount !== 1 ? 's' : ''} were rejected at checkout.
+                {result.unverifiedCount} candidate{result.unverifiedCount !== 1 ? 's' : ''} were rejected at checkout (not shown).
               </p>
             )}
           </div>
         )}
       </div>
-
-      {/* ── Unverified / Untested Candidates ── */}
-      {result.unverifiedCodes && result.unverifiedCodes.length > 0 && (
-        <div className="space-y-4 pt-4">
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-hunter-border/30" />
-            <div className="flex items-center gap-2">
-              <AlertTriangle size={12} className="text-hunter-muted" />
-              <span className="text-[10px] text-hunter-muted font-mono uppercase tracking-[0.4em]">
-                Unverified Candidates ({result.unverifiedCodes.length})
-              </span>
-            </div>
-            <div className="h-px flex-1 bg-hunter-border/30" />
-          </div>
-          <p className="text-center text-[10px] text-hunter-muted/60 font-mono">
-            These candidates were discovered on live forums/coupon sites but failed validation or could not be tested (e.g. login wall).
-          </p>
-          <div className="grid gap-4 opacity-75">
-            {result.unverifiedCodes.map((code, idx) => (
-              <ResultCard
-                key={`unver-${code.code}-${idx}`}
-                code={code}
-                rank={idx + 100}
-                onSave={onSaveCode}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Influencer / Social codes — clearly unverified ── */}
-      {influencerCodes.length > 0 && (
-        <div className="space-y-4 pt-4">
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-hunter-purple/20" />
-            <div className="flex items-center gap-2">
-              <AlertTriangle size={11} className="text-yellow-500" />
-              <span className="text-[10px] text-yellow-500/80 font-mono uppercase tracking-[0.4em]">
-                Social Codes — NOT Checkout Verified
-              </span>
-            </div>
-            <div className="h-px flex-1 bg-hunter-purple/20" />
-          </div>
-          <p className="text-center text-[10px] text-hunter-muted/60 font-mono">
-            These influencer codes have NOT been tested at a real checkout. Use at your own discretion.
-          </p>
-          <div className="grid gap-4 opacity-70">
-            {influencerCodes.map((code, idx) => (
-              <ResultCard
-                key={`infl-${idx}`}
-                code={code}
-                rank={idx + 10}
-                onSave={onSaveCode}
-              />
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -150,8 +150,8 @@ export default function App() {
     const [searchLocation, setSearchLocation] = useState('');
     // const [searchRegionFlag, setSearchRegionFlag] = useState('🌍'); <--- Removed
     // const [regionSelected, setRegionSelected] = useState(false); <--- Removed logic
-    // NEW STATE: Influencer & Glitch Layers
-    const [influencerCodes, setInfluencerCodes] = useState<CouponCode[]>([]);
+    // Influencer codes are collected internally but NEVER passed to results UI (verify-only invariant).
+    const [, setInfluencerCodes] = useState<CouponCode[]>([]);
     const [glitchStatus, setGlitchStatus] = useState<{ probability: number, warning?: string } | null>(null);
 
     const [status, setStatus] = useState<SearchStatus>(SearchStatus.IDLE);
@@ -404,7 +404,6 @@ export default function App() {
                         result={result}
                         activeTab={activeTab}
                         onSaveCode={handleSaveCode}
-                        influencerCodes={influencerCodes}
                         glitchStatus={glitchStatus}
                         inboxItems={inbox}
                         historyItems={searchHistory}
