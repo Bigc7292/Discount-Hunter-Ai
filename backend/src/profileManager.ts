@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { getAgentMailConfig } from './agentMailClient';
+import { getAgentMailConfig } from './agentMailClient.js';
 
 export interface ProfileAccount {
   id: string;

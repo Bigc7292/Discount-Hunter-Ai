@@ -8,7 +8,7 @@
  */
 
 import { createHash } from 'crypto';
-import type { CodeVerificationResult, MerchantInfo } from './types';
+import type { CodeVerificationResult, MerchantInfo } from './types.js';
 
 export type LedgerResult = 'pass' | 'fail' | 'error' | 'expired';
 
