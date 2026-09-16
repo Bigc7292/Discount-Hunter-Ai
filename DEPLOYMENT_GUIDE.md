@@ -1,5 +1,7 @@
 # Discount Hunter AI - Deployment Guide
 
+> **One-shot production deploy (Vercel + Railway):** see **[`DEPLOY.md`](./DEPLOY.md)** for Launch DoD #4 — step order, env **names** checklist, health check, CORS / `FRONTEND_URL`, Stripe webhook path, and Firestore rules. Secrets are owner-provided; this guide does not claim production is live.
+
 This guide covers deploying your Discount Hunter AI application to Vercel, configuring Firebase, and linking a custom domain.
 
 ## Table of Contents

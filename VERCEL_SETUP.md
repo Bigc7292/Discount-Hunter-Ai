@@ -54,6 +54,17 @@ If you want user authentication to work, add these Firebase variables:
 
 ---
 
+
+---
+
+## Verifier backend URL (required for real checkout verification)
+
+**Variable Name:** `VITE_VERIFIER_API_URL`  
+**Value:** Public Railway (or successor) HTTPS URL of the Express verifier — **no trailing slash**  
+**Example shape:** `https://your-service.up.railway.app`
+
+Also set Firebase / NVIDIA vars as needed. Full one-shot order (Railway first, then Vercel): see **[`DEPLOY.md`](./DEPLOY.md)**.
+
 ## Quick Checklist
 
 After adding variables in Vercel:
