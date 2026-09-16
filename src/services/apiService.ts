@@ -202,17 +202,22 @@ export async function discoverCodes(
 
 
 // ---------------------------------------------------------------------------
-// Stripe lifetime checkout — creates a TEST MODE Checkout Session via backend
+// Stripe checkout — yearly (subscription) or lifetime (one-time), TEST MODE
 // ---------------------------------------------------------------------------
 
-export async function createLifetimeCheckoutSession(idToken: string): Promise<{ url: string }> {
+export type StripeCheckoutPlan = 'yearly' | 'lifetime';
+
+export async function createCheckoutSession(
+  idToken: string,
+  plan: StripeCheckoutPlan = 'lifetime',
+): Promise<{ url: string; plan: StripeCheckoutPlan }> {
   const response = await fetch(`${API_BASE_URL}/stripe/create-checkout-session`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${idToken}`,
     },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ plan }),
   });
 
   if (!response.ok) {
@@ -220,5 +225,10 @@ export async function createLifetimeCheckoutSession(idToken: string): Promise<{ 
     throw new Error(err.error || `Checkout session failed: HTTP ${response.status}`);
   }
 
-  return await response.json() as { url: string };
+  return await response.json() as { url: string; plan: StripeCheckoutPlan };
+}
+
+/** @deprecated Prefer createCheckoutSession(idToken, 'lifetime') */
+export async function createLifetimeCheckoutSession(idToken: string): Promise<{ url: string }> {
+  return createCheckoutSession(idToken, 'lifetime');
 }

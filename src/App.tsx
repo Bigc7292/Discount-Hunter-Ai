@@ -9,13 +9,13 @@ import { doc, getDoc, collection, addDoc, query as firestoreQuery, getDocs, orde
 
 import { SearchStatus, SearchResult, LogEntry, User, CouponCode, InboxItem, HistoryEntry } from './types';
 import { runSearch } from './services/searchService';
-import { createLifetimeCheckoutSession } from './services/apiService';
+import { createCheckoutSession } from './services/apiService';
 // nvidiaService is used internally by searchService — no direct import needed here
 import { subscribeToRecentSavings, formatSavingForTicker, RecentSaving } from './services/recentSavingsService';
 import TerminalLog from './components/TerminalLog';
 import ResultCard from './components/ResultCard';
 import AuthModal from './components/AuthModal';
-import PricingModal from './components/PricingModal';
+import PricingModal, { CheckoutPlan } from './components/PricingModal';
 import BackgroundCanvas from './components/BackgroundCanvas';
 import HeroSearchBar from './components/HeroSearchBar';
 import Dashboard from './components/Dashboard';
@@ -249,7 +249,9 @@ export default function App() {
                     setUser({ ...userDoc.data(), id: user.id } as User);
                 }
                 if (checkout === 'success') {
-                    addLog('LIFETIME ACCESS CONFIRMED VIA STRIPE.', 'system');
+                    const planParam = params.get('plan');
+                    const accessLabel = planParam === 'yearly' ? 'YEARLY VERIFIED ACCESS' : 'LIFETIME VERIFIED ACCESS';
+                    addLog(`${accessLabel} CONFIRMED VIA STRIPE.`, 'system');
                 }
             } catch (error) {
                 console.error('Post-checkout refresh failed:', error);
@@ -268,13 +270,14 @@ export default function App() {
     const addLog = (message: string, type: LogEntry['type'] = 'info') => { setLogs(prev => [...prev, { id: Math.random().toString(36).substring(7), timestamp: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }), message, type }]); };
     const handleLogin = (loggedInUser: User) => { setIsAuthOpen(false); setUser(loggedInUser); };
     const handleLogout = async () => { try { await signOut(auth); setUser(null); setIsDashboardOpen(false); setDailySearchesUsed(0); addLog('SESSION TERMINATED.', 'system'); } catch (error) { console.error("Logout failed", error); } };
-    const handleUpgrade = async () => {
+    const handleUpgrade = async (plan: CheckoutPlan = 'lifetime') => {
         if (!user) { setIsAuthOpen(true); return; }
         if (!auth?.currentUser) { setIsAuthOpen(true); return; }
         try {
-            addLog('INITIATING STRIPE LIFETIME CHECKOUT...', 'system');
+            const label = plan === 'yearly' ? 'YEARLY VERIFIED ACCESS' : 'LIFETIME VERIFIED ACCESS';
+            addLog(`INITIATING STRIPE ${label} CHECKOUT...`, 'system');
             const idToken = await auth.currentUser.getIdToken();
-            const { url } = await createLifetimeCheckoutSession(idToken);
+            const { url } = await createCheckoutSession(idToken, plan);
             setIsPricingOpen(false);
             window.location.href = url;
         } catch (error) {
