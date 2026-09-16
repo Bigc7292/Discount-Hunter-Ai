@@ -13,7 +13,7 @@
  * NEW BEHAVIOR: Searches real web sources, extracts actual code strings from text
  */
 
-import { discoverCodes as orchestratorDiscoverCodes, DiscoveryResult } from './discovery/orchestrator';
+import { discoverCodes as orchestratorDiscoverCodes, DiscoveryResult } from './discovery/orchestrator.js';
 export type { DiscoveryResult };
 
 /**

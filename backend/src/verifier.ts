@@ -15,10 +15,10 @@ import type {
   VerificationRequest,
   VerificationResponse,
   CodeVerificationResult
-} from './types';
-import { getGeoLocation } from './geoProxy';
-import { simulateCheckout } from './browserBot';
-import { appendLedgerFromResult } from './ledger';
+} from './types.js';
+import { getGeoLocation } from './geoProxy.js';
+import { simulateCheckout } from './browserBot.js';
+import { appendLedgerFromResult } from './ledger.js';
 
 // Maximum time to verify ALL codes in a batch
 const BATCH_TIMEOUT_MS = 180_000; // 3 minutes

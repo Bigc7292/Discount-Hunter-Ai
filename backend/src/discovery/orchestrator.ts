@@ -11,12 +11,12 @@
  * Returns deduplicated candidates sorted by confidence.
  */
 
-import { searchForCodes as serperSearch } from './serperService';
-import { scrapeCouponPages, scrapeUrls } from './jinaService';
-import { searchSocialMedia } from './zernioService';
-import { tavilySearchForCodes } from './tavilyService';
-import { extractCodes, CandidateCode } from './codeExtractor';
-import { isRegionCompatible } from './regionUtils';
+import { searchForCodes as serperSearch } from './serperService.js';
+import { scrapeCouponPages, scrapeUrls } from './jinaService.js';
+import { searchSocialMedia } from './zernioService.js';
+import { tavilySearchForCodes } from './tavilyService.js';
+import { extractCodes, CandidateCode } from './codeExtractor.js';
+import { isRegionCompatible } from './regionUtils.js';
 
 export interface DiscoveryResult {
   candidates: CandidateCode[];

@@ -1,7 +1,7 @@
 import path from 'path';
-import { ensureLogDirectory, appendJsonl, writeJson } from './logging';
-import { verifyCodes } from './verifier';
-import type { VerificationRequest } from './types';
+import { ensureLogDirectory, appendJsonl, writeJson } from './logging.js';
+import { verifyCodes } from './verifier.js';
+import type { VerificationRequest } from './types.js';
 
 export interface TestCase {
   name: string;

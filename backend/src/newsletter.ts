@@ -3,7 +3,7 @@
 // Listens for new emails on a catch‑all inbox, extracts HTML bodies,
 // runs the code extractor on each email, and queues discovered codes for verification.
 
-import { extractCodes } from './discovery/codeExtractor';
+import { extractCodes } from './discovery/codeExtractor.js';
 
 const logger = console;
 

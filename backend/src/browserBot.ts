@@ -12,8 +12,8 @@
 
 import puppeteer from 'puppeteer';
 import type { Browser, Page } from 'puppeteer';
-import type { BrowserTestResult, ProxyConfig } from './types';
-import { formatProxyUrl } from './geoProxy';
+import type { BrowserTestResult, ProxyConfig } from './types.js';
+import { formatProxyUrl } from './geoProxy.js';
 
 // Singleton browser instance — reused across verifications
 let browserInstance: Browser | null = null;
