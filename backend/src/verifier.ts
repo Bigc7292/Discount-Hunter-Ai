@@ -18,6 +18,7 @@ import type {
 } from './types';
 import { getGeoLocation } from './geoProxy';
 import { simulateCheckout } from './browserBot';
+import { appendLedgerFromResult } from './ledger';
 
 // Maximum time to verify ALL codes in a batch
 const BATCH_TIMEOUT_MS = 180_000; // 3 minutes
@@ -184,22 +185,34 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
       // Mark remaining codes as error
       const remaining = codes.slice(results.length);
       for (const c of remaining) {
-        results.push({
+        const timeoutResult = {
           code: c.code,
-          status: 'error',
+          status: 'error' as const,
           confidence: 0,
           errorMessage: 'Verification timeout — batch took too long',
           testedAt: new Date().toISOString(),
           testRegion,
           responseTime: 0,
-          terms: [],
-        });
+          terms: [] as string[],
+        };
+        results.push(timeoutResult);
+        try {
+          await appendLedgerFromResult(merchant, timeoutResult, testRegion);
+        } catch {
+          /* non-fatal */
+        }
       }
       break;
     }
 
     const result = await verifySingleCode(merchant, candidate, testRegion);
     results.push(result);
+    // Public ledger: redacted code only (last4 + hash)
+    try {
+      await appendLedgerFromResult(merchant, result, testRegion);
+    } catch (ledgerErr) {
+      console.warn('[Verifier] Ledger append failed:', ledgerErr instanceof Error ? ledgerErr.message : ledgerErr);
+    }
 
     // Small pause between codes (be a respectful bot)
     if (results.length < codes.length) {

@@ -23,6 +23,8 @@ import { cleanup } from './browserBot';
 import { discoverCodes } from './discovery';
 import { runVerificationTests } from './testRunner';
 import { createProfileAccount } from './profileManager';
+import { rateLimitMiddleware } from './rateLimit';
+import { listLedger } from './ledger';
 import 'dotenv/config';
 
 const app = express();
@@ -127,6 +129,26 @@ app.post('/stripe/webhook', express.raw({ type: 'application/json' }), async (re
 });
 
 app.use(express.json({ limit: '2mb' }));
+
+// Trust proxy so req.ip / X-Forwarded-For work behind Railway/Vercel
+app.set('trust proxy', 1);
+
+// Rate limits — expensive discovery / checkout simulation routes
+const verifyRateLimit = rateLimitMiddleware({
+  prefix: 'verify',
+  envKey: 'RATE_LIMIT_VERIFY_PER_MIN',
+  defaultPerMin: 10,
+});
+const discoverRateLimit = rateLimitMiddleware({
+  prefix: 'discover',
+  envKey: 'RATE_LIMIT_DISCOVER_PER_MIN',
+  defaultPerMin: 20,
+});
+const testsRateLimit = rateLimitMiddleware({
+  prefix: 'tests',
+  envKey: 'RATE_LIMIT_VERIFY_PER_MIN',
+  defaultPerMin: 10,
+});
 
 // ── Request schemas ─────────────────────────────────────────────────────────
 
@@ -245,7 +267,7 @@ app.post('/stripe/create-checkout-session', async (req, res) => {
 });
 
 // Discovery — real multi-source web discovery
-app.post('/discover', async (req, res) => {
+app.post('/discover', discoverRateLimit, async (req, res) => {
   try {
     const { query, region } = discoverRequestSchema.parse(req.body);
 
@@ -291,7 +313,7 @@ app.post('/discover', async (req, res) => {
 
 
 // Test runner — execute a batch of verification cases and save structured logs
-app.post('/tests/run', async (req, res) => {
+app.post('/tests/run', testsRateLimit, async (req, res) => {
   try {
     const body = testRunRequestSchema.parse(req.body);
     const summary = await runVerificationTests(body.testCases as Array<{ name: string; request: { merchant: { name: string; url: string; region: string }; codes: Array<{ code: string; description: string; source: string; sourceUrl?: string; discoveredAt: string }>; testRegion: string } }>);
@@ -322,7 +344,7 @@ app.get('/tests/logs', async (_req, res) => {
 });
 
 // Verify — REAL checkout testing with Puppeteer
-app.post('/verify', async (req, res) => {
+app.post('/verify', verifyRateLimit, async (req, res) => {
   const requestStart = Date.now();
 
   try {
@@ -394,6 +416,23 @@ app.post('/verify', async (req, res) => {
   }
 });
 
+
+// Public verified-checkout ledger (newest first, no full codes)
+app.get('/ledger', async (req, res) => {
+  try {
+    const limit = Number.parseInt(String(req.query.limit ?? '50'), 10);
+    const offset = Number.parseInt(String(req.query.offset ?? '0'), 10);
+    const data = await listLedger({
+      limit: Number.isFinite(limit) ? limit : 50,
+      offset: Number.isFinite(offset) ? offset : 0,
+    });
+    res.json(data);
+  } catch (error) {
+    console.error('[LEDGER] list error:', error);
+    res.status(500).json({ error: 'Failed to load ledger', details: String(error) });
+  }
+});
+
 // ── Graceful shutdown ───────────────────────────────────────────────────────
 
 async function shutdown() {
@@ -414,7 +453,9 @@ app.listen(PORT, () => {
   console.log(`   Health:  http://localhost:${PORT}/health`);
   console.log(`   Regions: http://localhost:${PORT}/regions`);
   console.log(`   Stripe:  ${stripe ? 'CONFIGURED' : 'NOT SET'}`);
+  console.log(`   Ledger:  http://localhost:${PORT}/ledger`);
   console.log(`   Headless: ${process.env.USE_HEADLESS_BROWSER !== 'false'}`);
+  console.log(`   RateLim: verify=${process.env.RATE_LIMIT_VERIFY_PER_MIN || '10'}/min discover=${process.env.RATE_LIMIT_DISCOVER_PER_MIN || '20'}/min`);
   console.log(`   Proxy:   ${process.env.RESIDENTIAL_PROXY_API_KEY ? 'CONFIGURED' : 'NOT SET (geo-testing disabled)'}`);
   console.log('');
 });

@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { UserPlus, Search, ShieldCheck, Zap, ArrowRight, Sparkles } from 'lucide-react';
+import CheckoutLedger from './CheckoutLedger';
 
 interface LandingPageProps {
     onStartHunting: () => void;
@@ -128,6 +129,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ onStartHunting }) => {
                     </div>
                 </div>
             </section>
+
+            <CheckoutLedger />
 
             {/* FOOTER MINI */}
             <footer className="py-12 px-4 border-t border-hunter-border text-center">
