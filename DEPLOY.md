@@ -1,4 +1,6 @@
-# Deploy — Vercel (frontend) + Railway (verifier backend)
+# Deploy — Vercel (frontend) + Fly.io (verifier backend)
+
+> **Backend host:** Prefer **Fly.io** (`FLY.md`, `backend/fly.toml`). Railway remains a documented alternative below.
 
 **Launch DoD #4:** Frontend + verifier backend deployed and wired.
 
@@ -7,16 +9,18 @@
 
 Successor platforms (Cloudflare Pages, Fly.io, Render, etc.) are fine if they replace Vercel/Railway; keep the same env **names** and health/CORS wiring.
 
+**Fly.io (current preferred backend):** see **[FLY.md](./FLY.md)** — app `discount-hunter-api`, region `iad`, internal port `3001`, ≥1–2GB RAM for Chromium.
+
 ---
 
 ## Step order (owner)
 
-1. **Deploy backend on Railway** (needs public HTTPS URL first).
-2. **Deploy frontend on Vercel** with `VITE_VERIFIER_API_URL` = that Railway URL (no trailing slash).
-3. **Set `FRONTEND_URL` on Railway** to the Vercel origin so CORS + Stripe redirects work.
+1. **Deploy backend on Fly.io** (see [FLY.md](./FLY.md); needs public HTTPS URL first). Railway is an alternative — same env names.
+2. **Deploy frontend on Vercel** with `VITE_VERIFIER_API_URL` = that Fly (or Railway) URL (no trailing slash).
+3. **Set `FRONTEND_URL` on Fly** (`fly secrets set`) to the Vercel origin so CORS + Stripe redirects work.
 4. **Deploy `firestore.rules`** (and indexes if needed) via Firebase CLI / Console.
-5. **Wire Stripe webhook** to Railway (if using PR #1 Stripe lifetime checkout).
-6. Smoke-test: `GET {RAILWAY_URL}/health` → frontend hunt → optional Stripe test checkout.
+5. **Wire Stripe webhook** to Fly (or Railway) after public URL exists; then set `STRIPE_WEBHOOK_SECRET`.
+6. Smoke-test: `GET {FLY_URL}/health` → frontend hunt → optional Stripe test checkout.
 
 Do **not** merge open feature PRs (#1–#5) from this guide; merge order is owner-owned. Env names below include those PRs so deploy stays ready after they land.
 
