@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { LogIn, Sun, Moon, Bell, Check, Sparkles, ArrowRight, Laptop, Shirt, Plane, Pizza, Briefcase, Search, Loader2, Zap, Lock, Database, Crown, ShieldAlert, Frown, ExternalLink, Globe, ChevronDown, Timer, Download, MapPin, Crosshair, Target, ChevronRight, ArrowLeft } from 'lucide-react';
+import { LogIn, Sun, Moon, Bell, Check, Sparkles, ArrowRight, Laptop, Shirt, Plane, Pizza, Briefcase, Search, Loader2, Zap, Lock, Database, Crown, ShieldAlert, Frown, ExternalLink, Globe, ChevronDown, Timer, Download, MapPin, Crosshair, Target, ChevronRight, ArrowLeft, Menu } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring } from 'framer-motion';
 
 // --- FIREBASE IMPORTS ---
@@ -163,6 +163,7 @@ export default function App() {
     const [isPricingOpen, setIsPricingOpen] = useState(false);
     const [isDashboardOpen, setIsDashboardOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<'overview' | 'inbox' | 'history' | 'account' | 'admin'>('overview');
+    const [sidebarOpen, setSidebarOpen] = useState(false);
     const [dailySearchesUsed, setDailySearchesUsed] = useState(0);
     const [inbox, setInbox] = useState<InboxItem[]>([]);
     const [searchHistory, setSearchHistory] = useState<HistoryEntry[]>([]);
@@ -269,7 +270,7 @@ export default function App() {
 
     const addLog = (message: string, type: LogEntry['type'] = 'info') => { setLogs(prev => [...prev, { id: Math.random().toString(36).substring(7), timestamp: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }), message, type }]); };
     const handleLogin = (loggedInUser: User) => { setIsAuthOpen(false); setUser(loggedInUser); };
-    const handleLogout = async () => { try { await signOut(auth); setUser(null); setIsDashboardOpen(false); setDailySearchesUsed(0); addLog('SESSION TERMINATED.', 'system'); } catch (error) { console.error("Logout failed", error); } };
+    const handleLogout = async () => { try { await signOut(auth); setUser(null); setIsDashboardOpen(false); setSidebarOpen(false); setDailySearchesUsed(0); addLog('SESSION TERMINATED.', 'system'); } catch (error) { console.error("Logout failed", error); } };
     const handleUpgrade = async (plan: CheckoutPlan = 'lifetime') => {
         if (!user) { setIsAuthOpen(true); return; }
         if (!auth?.currentUser) { setIsAuthOpen(true); return; }
@@ -392,25 +393,44 @@ export default function App() {
                     <Sidebar
                         user={user}
                         activeTab={activeTab}
-                        onTabChange={setActiveTab}
+                        onTabChange={(tab) => { setActiveTab(tab); setSidebarOpen(false); }}
                         onLogout={handleLogout}
+                        isOpen={sidebarOpen}
+                        onClose={() => setSidebarOpen(false)}
                     />
 
-                    <DashboardWorkspace
-                        query={query}
-                        onQueryChange={setQuery}
-                        onSearch={(q) => handleSearch(undefined, q)}
-                        status={status}
-                        searchLocation={searchLocation}
-                        onLocationChange={setSearchLocation}
-                        logs={logs}
-                        result={result}
-                        activeTab={activeTab}
-                        onSaveCode={handleSaveCode}
-                        glitchStatus={glitchStatus}
-                        inboxItems={inbox}
-                        historyItems={searchHistory}
-                    />
+                    <div className="flex-1 flex flex-col min-w-0 h-full relative">
+                        {/* Mobile top bar — hamburger opens overlay drawer */}
+                        <header className="md:hidden sticky top-0 z-30 flex items-center gap-3 px-4 h-14 border-b border-hunter-border bg-black/70 backdrop-blur-md shrink-0">
+                            <button
+                                type="button"
+                                onClick={() => setSidebarOpen(true)}
+                                className="p-2 -ml-1 rounded-lg text-hunter-cyan border border-hunter-cyan/30 bg-hunter-cyan/10 hover:bg-hunter-cyan/20 transition-colors"
+                                aria-label="Open menu"
+                                aria-expanded={sidebarOpen}
+                            >
+                                <Menu size={18} />
+                            </button>
+                            <img src="/logo.jpg" alt="Discount Hunter AI" className="h-8 w-auto object-contain drop-shadow-[0_0_12px_rgba(0,240,255,0.5)]" />
+                            <span className="ml-auto text-[9px] font-mono text-hunter-muted tracking-widest uppercase">Agent Online</span>
+                        </header>
+
+                        <DashboardWorkspace
+                            query={query}
+                            onQueryChange={setQuery}
+                            onSearch={(q) => handleSearch(undefined, q)}
+                            status={status}
+                            searchLocation={searchLocation}
+                            onLocationChange={setSearchLocation}
+                            logs={logs}
+                            result={result}
+                            activeTab={activeTab}
+                            onSaveCode={handleSaveCode}
+                            glitchStatus={glitchStatus}
+                            inboxItems={inbox}
+                            historyItems={searchHistory}
+                        />
+                    </div>
 
                     {/* Dashboard overlays (Portals) */}
                     {isDashboardOpen && (
