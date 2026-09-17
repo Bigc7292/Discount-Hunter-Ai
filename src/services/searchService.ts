@@ -20,7 +20,10 @@ const MAX_CODES_TO_VERIFY = 10;
 // Verifier timeout: if backend takes longer than this, abort (ms)
 const VERIFIER_TIMEOUT_MS = 120_000; // 2 minutes
 
-const VERIFIER_URL = import.meta.env.VITE_VERIFIER_API_URL || 'http://localhost:3001';
+const VERIFIER_URL = import.meta.env.VITE_VERIFIER_API_URL ||
+  (import.meta.env.PROD
+    ? 'https://discount-hunter-backend-oz8e.onrender.com'
+    : 'http://localhost:3001');
 
 type LogHandler = (message: string, type: LogEntry['type']) => void;
 
