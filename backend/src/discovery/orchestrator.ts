@@ -4,7 +4,7 @@
  * Work tree stages (see /DISCOVERY_WORK_TREE.md):
  *   Stage A — Web search:     Serper + Tavily
  *   Stage B — Deal aggregators: Jina scrapeCouponPages (RetailMeNot etc.)
- *   Stage C — Social:         Zernio (Reddit + connected social)
+ *   Stage C — Social/search:  Agent-Reach (Exa MCP + optional CLIs) + Zernio (optional/paused)
  *   Stage D — Merchant/deep:  Jina scrapeUrls on Serper hits (Firecrawl ready, not wired)
  *   Stage E — Influencer:     Serper/Tavily query angles (bios via future URL scrape)
  *
@@ -18,6 +18,7 @@
 import { searchForCodes as serperSearch } from './serperService.js';
 import { scrapeCouponPages, scrapeUrls } from './jinaService.js';
 import { searchSocialMedia } from './zernioService.js';
+import { searchViaAgentReach } from './agentReachService.js';
 import { tavilySearchForCodes } from './tavilyService.js';
 import { extractCodes, CandidateCode } from './codeExtractor.js';
 import { isRegionCompatible } from './regionUtils.js';
@@ -102,14 +103,16 @@ export async function discoverCodes(
   console.log(`\n🔍 DISCOVERY START: "${storeName}" | domain: ${domain} | region: ${region}`);
 
   // ── PHASE 1: Parallel Stages A + B + C (+ E via search query angles) ─────────
-  // Stage A: Serper + Tavily | Stage B: Jina aggregators | Stage C: Zernio social
+  // Stage A: Serper + Tavily | Stage B: Jina aggregators
+  // Stage C: Agent-Reach (preferred free social/search) + Zernio (optional/cost-paused)
   console.log('[Orchestrator] Phase 1: Running Stages A/B/C in parallel...');
 
-  const [serperResults, jinaResults, socialResults, tavilyResults] = await Promise.allSettled([
+  const [serperResults, jinaResults, socialResults, tavilyResults, agentReachResults] = await Promise.allSettled([
     serperSearch(storeName, domain, region),       // Stage A (+ E query angles)
     scrapeCouponPages(storeName, domain, region, 6), // Stage B
-    searchSocialMedia(storeName, domain, region),  // Stage C
+    searchSocialMedia(storeName, domain, region),  // Stage C (Zernio — no-op if key absent)
     tavilySearchForCodes(storeName, domain, region), // Stage A (+ E)
+    searchViaAgentReach(storeName, domain, region),  // Stage C (Agent-Reach — graceful no-op)
   ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : []));
 
   // Track what ran successfully
@@ -117,6 +120,7 @@ export async function discoverCodes(
   if ((jinaResults as any[]).length > 0) sourcesSearched.push('Coupon Page Scraper (Jina)');
   if ((socialResults as any[]).length > 0) sourcesSearched.push('Reddit & Social (Zernio)');
   if ((tavilyResults as any[]).length > 0) sourcesSearched.push('AI Web Search (Tavily)');
+  if ((agentReachResults as any[]).length > 0) sourcesSearched.push('Agent-Reach (Exa/CLI)');
 
   // ── PHASE 2: Stage D — deep scrape top Serper URLs (Jina; Firecrawl optional later)
   const serperUrls = (serperResults as any[])
@@ -136,6 +140,7 @@ export async function discoverCodes(
     ...(jinaResults as any[]),
     ...(socialResults as any[]),
     ...(tavilyResults as any[]),
+    ...(agentReachResults as any[]),
     ...scrapedSerperPages,
   ] as Array<{ text: string; url: string; source: string }>;
 

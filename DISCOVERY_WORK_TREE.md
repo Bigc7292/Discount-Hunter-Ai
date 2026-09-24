@@ -15,6 +15,7 @@ This document is the clear map of how Discount Hunter AI finds candidate codes a
 | **Serper** | `serperService.ts` | Google Search API — snippets + answer box; multi-query (coupon sites, Reddit, region, influencer) | `SERPER_API_KEY` | Yes — Phase 1 parallel |
 | **Jina Reader** | `jinaService.ts` | URL → markdown; scrapes RetailMeNot / Groupon / Slickdeals / region aggregators + Serper hit URLs | **No** (anonymous `r.jina.ai`, ~20 req/min) | Yes — Phase 1 coupon pages + Phase 2 URL scrape |
 | **Zernio** | `zernioService.ts` | Reddit search/feeds via Zernio (intended path for X/IG/TikTok/YouTube when accounts connected). **OPTIONAL / cost-paused by default** — leave keys empty for **zero Zernio spend** | `ZERNIO_API_KEY` + `ZERNIO_REDDIT_ACCOUNT_ID` (**omit to skip**) | Yes — Phase 1 parallel; **no-ops when key missing** |
+| **Agent-Reach** | `agentReachService.ts` | Free Stage C social/search angles: **Exa MCP** (keyless HTTP), optional `yt-dlp` / `agent-reach` CLIs when in PATH; Reddit/X cookie CLIs stubbed | None for Exa; optional `AGENT_REACH_ENABLED`, `AGENT_REACH_BIN`, Twitter cookies | Yes — Phase 1 parallel; **graceful no-op** if disabled / deps missing |
 | **Tavily** | `tavilyService.ts` | AI-native web search; deeper content for forums / influencer / affiliate codes | `TAVILY_API_KEY` | Yes — Phase 1 parallel |
 | **Firecrawl** | `firecrawlService.ts` → `../firecrawlService.ts` | Clean markdown scrape via Firecrawl API | `FIRECRAWL_API_KEY` | **No** — service exists, **not** called by orchestrator yet |
 | **Code extractor** | `codeExtractor.ts` | Regex fast-pass + optional NVIDIA NIM LLM pass → `CandidateCode[]` | `NVIDIA_API_KEY` optional (regex always runs) | Yes — after aggregate |
@@ -30,7 +31,8 @@ discoverCodes(query, region)
   ├─ PHASE 1 (Promise.allSettled — parallel)
   │    ├─ Serper.searchForCodes()
   │    ├─ Jina.scrapeCouponPages()     // aggregator URLs by region
-  │    ├─ Zernio.searchSocialMedia()   // Reddit (+ social if keyed)
+  │    ├─ Zernio.searchSocialMedia()   // Reddit (+ social if keyed) — no-op if key absent
+  │    ├─ AgentReach.searchViaAgentReach() // Exa MCP + optional CLIs — Stage C preferred free path
   │    └─ Tavily.tavilySearchForCodes()
   │
   ├─ PHASE 2 (after Phase 1)
@@ -61,6 +63,10 @@ Graceful degrade: missing keys → empty array from that adapter; pipeline conti
 | *(none)* | **Jina Reader** (`r.jina.ai`) | **Already free** — no key |
 | `ZERNIO_API_KEY` | Zernio social | **OPTIONAL / cost-paused** — leave empty for zero Zernio cost |
 | `ZERNIO_REDDIT_ACCOUNT_ID` | Zernio Reddit | Only if/when re-enabling Zernio |
+| `AGENT_REACH_ENABLED` | Agent-Reach Stage C | Default `1`; set `0` to disable |
+| `AGENT_REACH_BIN` | Optional path to `agent-reach` CLI | Optional — PATH lookup if unset |
+| `EXA_MCP_URL` | Exa MCP endpoint override | Optional — default `https://mcp.exa.ai/mcp?tools=web_search_exa` |
+| `TWITTER_AUTH_TOKEN` / `TWITTER_CT0` | twitter-cli cookie path | **Optional sidecar only** — not required on Render |
 | `FIRECRAWL_API_KEY` | Firecrawl (optional Stage D upgrade) | Optional; free-tier caution — see §3a |
 | `NVIDIA_API_KEY` | LLM extract pass (regex works without) | Optional |
 
@@ -81,10 +87,10 @@ Map logical **stages** onto existing adapters. Stages may run in parallel where 
      ┌─────────────┬─────────────┬─────┴─────┬─────────────┬─────────────┐
      ▼             ▼             ▼           ▼             ▼             ▼
  Stage A        Stage B       Stage C     Stage D       Stage E      (future)
- Web search    Deal aggs     Social      Merchant      Influencer
- Serper+       Jina scrape   Zernio      pages         / bios
- Tavily        RetailMeNot…  Reddit/X/   Firecrawl/    Serper+
-                               IG/TT      Jina          Tavily
+ Web search    Deal aggs     Social+     Merchant      Influencer
+ Serper+       Jina scrape   AgentReach  pages         / bios
+ Tavily        RetailMeNot…  (+Zernio    Firecrawl/    Serper+
+                              optional)  Jina          Tavily
      └─────────────┴─────────────┴─────┬─────┴─────────────┴─────────────┘
                                        ▼
                          CANDIDATE POOL (internal)
@@ -114,14 +120,15 @@ Map logical **stages** onto existing adapters. Stages may run in parallel where 
 - **Targets:** RetailMeNot, Groupon, Slickdeals; region: coupon.ae / rezeem / grabon (AE/SA), VoucherCodes (UK), Coupons.com / CouponFollow / Dealspotr (US default)
 - **Output:** markdown page text for extractor
 
-### Stage C — Social (owner: Zernio — **OPTIONAL / cost-paused**)
+### Stage C — Social / free search (owner: **Agent-Reach** preferred; Zernio optional/paused)
 
-- **Adapter:** `zernioService.searchSocialMedia`
-- **Cost policy (owner):** **zero Zernio spend for now.** Leave `ZERNIO_API_KEY` unset; service **skips** (returns `[]`) and orchestrator continues via `Promise.allSettled`.
-- **Today (when keyed):** Reddit search + feeds (`promocodes`, `deals`, region subs)
-- **Intended expansion (same key, later):** X / Instagram / TikTok / YouTube when Zernio accounts connected — still candidates only
-- **Free / low-cost alternative research:** see **§3a** (Agent-Reach + upstream CLIs) — **docs only in this PR; not wired into production runtime**
-- **Output:** post/comment text + permalinks (candidates only)
+- **Primary adapter:** `agentReachService.searchViaAgentReach` (wired)
+  - **Zero-config (Node/Render):** Exa MCP HTTP search — no API key (rate-limited)
+  - **When CLI in PATH:** `yt-dlp` YouTube search; optional `agent-reach doctor` probe
+  - **Cookie stubs (optional sidecar):** `twitter` / `opencli` / `rdt` — skip cleanly without owner session
+- **Secondary adapter:** `zernioService.searchSocialMedia` — **OPTIONAL / cost-paused.** Leave `ZERNIO_API_KEY` unset; service **skips** (`[]`); orchestrator continues via `Promise.allSettled`.
+- **CORE LAW:** Agent-Reach (and Zernio) output = **candidates only** → verify gate. Never user-facing alone.
+- **Output:** search/snippet/post text + URLs (candidates only)
 
 ### Stage D — Merchant / deep pages (owner: Firecrawl + Jina URL scrape)
 
@@ -162,67 +169,60 @@ Reputable, lawful APIs/libs aligned with existing stack. **Not** spammy scrapers
 
 ---
 
-## 3a. Free / low-cost social layer (research — not wired)
+## 3a. Agent-Reach Stage C (wired) — FACT vs JUDGMENT
 
-> **Scope of this section:** documentation + owner evaluation only. **Do not** install Agent-Reach or cookie CLIs into the Render production runtime in this PR. CORE LAW unchanged: candidates stay internal until checkout verify.
+> **CORE LAW unchanged:** candidates stay internal until checkout verify. Agent-Reach never marks a code verified.
 
-### Why look here?
+### FACT: what works zero-config (Render / Node Docker)
 
-Owner wants **zero Zernio cost for now**. Stage A/B already cover a lot via **Serper + Tavily + Jina (no key)**. Stage C social depth needs a **free / low-cost** path that does not burn Zernio credits.
+| Path | FACT |
+|------|------|
+| **Exa MCP HTTP** (`https://mcp.exa.ai/mcp`, tool `web_search_exa`) | Works **without API key** (rate-limited). Called from Node via JSON-RPC / SSE. Same free surface Agent-Reach documents via mcporter. |
+| **Jina Reader** (`r.jina.ai`) | Already wired in Stage B/D — no key. Not re-implemented inside `agentReachService`. |
+| **Graceful degrade** | Missing CLI / Exa failure / `AGENT_REACH_ENABLED=0` → `[]`; `Promise.allSettled` keeps pipeline alive. |
+| **Zernio** | Still **no-ops** when `ZERNIO_API_KEY` absent (cost-paused). |
 
-### FACT: [Panniantong/Agent-Reach](https://github.com/Panniantong/Agent-Reach)
+### FACT: what needs owner cookies / desktop session (optional sidecar)
 
-| Field | FACT |
-|-------|------|
-| License | **MIT** |
-| Stars (approx., check live) | ~85k on GitHub at research time |
-| Role | Installer / doctor / router CLI — routes agents to **upstream** tools; not a paid SaaS wrapper |
-| Positioning | “Read & search Twitter, Reddit, YouTube, GitHub, … — one CLI, **zero API fees**” (project claim) |
-| Web | [Jina Reader](https://github.com/jina-ai/reader) (`r.jina.ai`) — no API key for anonymous use |
-| YouTube | [yt-dlp](https://github.com/yt-dlp/yt-dlp) |
-| Reddit | [rdt-cli](https://github.com/public-clis/rdt-cli) and/or OpenCLI — **cookie / logged-in session**; anonymous Reddit endpoints are blocked per upstream docs |
-| Twitter/X | [twitter-cli](https://github.com/public-clis/twitter-cli) — **cookies** (`TWITTER_AUTH_TOKEN` / `TWITTER_CT0`) |
-| Semantic web search | [Exa](https://exa.ai) via [mcporter](https://github.com/nicobailon/mcporter) (Agent-Reach install path) |
+| Path | FACT |
+|------|------|
+| **Reddit** | Agent-Reach: **no zero-config path** (anonymous endpoints blocked). Needs OpenCLI browser login or `rdt-cli` + cookies. |
+| **Twitter/X** | Needs `twitter` CLI + `TWITTER_AUTH_TOKEN` / `TWITTER_CT0` in the **process** env. |
+| **Render constraint** | Headless PaaS has **no owner Chrome profile**. Do **not** invent a desktop cookie session on Render. |
 
-### JUDGMENT (ours)
+### JUDGMENT
 
 | Claim | Label | Note |
 |-------|-------|------|
-| Suitable as a **local / owner-desktop** research CLI for finding candidate URLs/posts | **JUDGMENT: yes, promising** | Aligns with zero Zernio spend |
-| Drop-in replacement for `zernioService` on **Render** today | **JUDGMENT: no** | Cookie CLIs need an **owner browser session**; a headless cloud box cannot “silently” reuse desktop cookies without the owner exporting/rotating them into server secrets |
-| Wire into production orchestrator in this PR | **No** | Docs/research only unless a later PR explicitly opts in |
-| ToS / ToU risk of cookie CLIs vs platform official APIs | **Caution** | Cookie-based access may violate platform Terms; prefer official APIs when affordable; keep candidates internal; never invent codes |
+| Prefer Agent-Reach Stage C over paid Zernio while cost-paused | **JUDGMENT: yes** | Exa MCP covers semantic “promo code” angles without Zernio spend |
+| Ship cookie CLIs inside Render Docker by default | **JUDGMENT: no** | Ban/ToS/secret-rotation risk; stub + docs only |
+| Optional owner laptop / sidecar with `agent-reach install` + cookies | **JUDGMENT: fine later** | Set `AGENT_REACH_BIN` / cookies on that host; still candidates → verify |
+| ToS risk of cookie CLIs vs official APIs | **Caution** | Prefer official/paid APIs when affordable; keep candidates internal |
 
-### Why server-side Render cannot silently use cookie CLIs
+### How owner enables it
 
-1. **FACT:** `rdt-cli` / `twitter-cli` authenticate with **cookies or browser login state** belonging to a human session.
-2. **FACT:** Render (and similar PaaS) runs **headless server processes** with no owner Chrome profile attached.
-3. **JUDGMENT:** Shipping owner cookies into `backend` env is possible but is an **explicit, high-risk ops choice** (secret rotation, ban risk, ToS) — not something the app should do automatically.
-4. **FACT today:** `zernioService.searchSocialMedia` already **skips** when `ZERNIO_API_KEY` is unset (`return []`); orchestrator uses `Promise.allSettled` — discovery continues on Serper / Jina / Tavily.
+**Local**
+1. Backend already calls Agent-Reach when `AGENT_REACH_ENABLED` is unset or `1`.
+2. Zero-config: ensure outbound HTTPS to `mcp.exa.ai` (Exa).
+3. Optional CLIs: install [Agent-Reach](https://github.com/Panniantong/Agent-Reach) / `yt-dlp` so they appear on `PATH` (or set `AGENT_REACH_BIN`).
+4. Optional cookies (desktop only): configure Twitter/Reddit per upstream docs — never commit cookies.
 
-**Practical free path now:** prefer **SERPER + TAVILY + Jina (no key)**; leave Zernio empty; use Agent-Reach / upstream CLIs only on an **owner machine** for ad-hoc research until a sanctioned server path exists.
-
-### Other free-ish options beyond Agent-Reach (short list)
-
-| Option | Cost shape | Caution |
-|--------|------------|---------|
-| **Exa** (API or via mcporter) | Free/low tier for semantic search | Rate limits / ToS; keys if not using Agent-Reach path |
-| **Jina Reader** | Anonymous free tier (~20 req/min) | Already integrated; respect rate limits |
-| **Firecrawl hosted free tier** | Limited free credits | Easy to burn; AGPL if self-hosting server — prefer hosted key only |
-| **DuckDuckGo HTML search libs** (e.g. community `duckduckgo-search`) | Often free, no key | Fragile HTML; ToS / blocking; use as last-resort Stage A supplement |
-| **snoowrap / Reddit official API** | “Free” only if app credentials still granted | Reddit API is approval-gated; confirm access before coding |
-
----
+**Render (`srv-d8u878lckfvc73esdtug`)**
+1. Leave `AGENT_REACH_ENABLED` unset or `1` (default in code).
+2. No Python Agent-Reach install required for Exa path.
+3. Keep `ZERNIO_*` empty for zero Zernio cost.
+4. Do **not** paste personal Reddit/X cookies into Render env unless you explicitly accept that ops risk later.
 
 ## 4. Owner checklist
 
 1. Add **`SERPER_API_KEY`** first → retest discover endpoint with a store query; confirm Serper appears in `sourcesSearched`.  
-2. Add `TAVILY_API_KEY`. Prefer **Serper + Tavily + Jina (no key)** while Zernio is cost-paused.  
-3. **Leave `ZERNIO_*` empty** for zero Zernio cost (service skips). Re-add `ZERNIO_API_KEY` + `ZERNIO_REDDIT_ACCOUNT_ID` only when intentionally re-enabling paid social.  
-4. Optionally `FIRECRAWL_API_KEY` before wiring Stage D upgrade (watch free-tier burn).  
-5. Optional owner-desktop research: [Agent-Reach](https://github.com/Panniantong/Agent-Reach) — **not** production-wired yet; see §3a.  
-6. Retest: discovery returns candidates **server-side only**; UI/API consumer shows **verified** codes only.  
-7. Never invent or hardcode “verified” codes in docs, fixtures shown to users, or UI mocks.
+2. Add `TAVILY_API_KEY`. Prefer **Serper + Tavily + Jina (no key) + Agent-Reach/Exa** while Zernio is cost-paused.  
+3. **Leave `ZERNIO_*` empty** for zero Zernio cost (service skips). Re-add only when intentionally re-enabling paid social.  
+4. Confirm Agent-Reach Stage C: discover logs / `sourcesSearched` may include `Agent-Reach (Exa/CLI)`; set `AGENT_REACH_ENABLED=0` to disable.  
+5. Optionally `FIRECRAWL_API_KEY` before wiring Stage D upgrade (watch free-tier burn).  
+6. Optional owner-desktop sidecar: install [Agent-Reach](https://github.com/Panniantong/Agent-Reach) CLIs + cookies — see §3a (not required on Render).  
+7. Retest: discovery returns candidates **server-side only**; UI/API consumer shows **verified** codes only.  
+8. Never invent or hardcode “verified” codes in docs, fixtures shown to users, or UI mocks.
 
 ---
 
