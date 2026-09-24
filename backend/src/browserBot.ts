@@ -1,19 +1,20 @@
 /**
  * BrowserBot — Puppeteer headless checkout simulator
  *
- * Improvements:
- * - Smarter checkout URL detection (tries /cart first, then /checkout)
- * - Per-session timeout with AbortController
- * - Human-like typing delays (randomised 40-120ms)
- * - More robust apply-button detection (evaluates visible text)
- * - Better success/failure signal extraction
- * - Proper browser instance cleanup on error
+ * Human-shopper verification path (HARD LAW: never complete paid purchase):
+ *   1. bootstrapCart(merchant) — add a cheap/in-stock item
+ *   2. navigateTowardCheckout — guest checkout when possible
+ *   3. find promo field near payment step (BEFORE card details)
+ *   4. applyCode → accept vs reject
+ *   5. abandonCart — clear bag; NEVER type/submit card; NEVER place order
+ *
+ * ErrorMessage categories (prefix):
+ *   cart_bootstrap_failed | no_promo_field | code_rejected | timeout | bot_blocked
  */
 
 import puppeteer from 'puppeteer';
-import type { Browser, Page } from 'puppeteer';
+import type { Browser, ElementHandle, Page } from 'puppeteer';
 import type { BrowserTestResult, ProxyConfig } from './types.js';
-import { formatProxyUrl } from './geoProxy.js';
 
 // Singleton browser instance — reused across verifications
 let browserInstance: Browser | null = null;
@@ -38,7 +39,7 @@ async function getBrowser(): Promise<Browser> {
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
           '--window-size=1366,768',
-          '--disable-blink-features=AutomationControlled', // Avoid bot detection
+          '--disable-blink-features=AutomationControlled',
           '--disable-infobars',
         ],
       });
@@ -58,162 +59,522 @@ async function wait(min: number, max?: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ---------------------------------------------------------------------------
-// Main checkout simulation
-// ---------------------------------------------------------------------------
+type ErrorCategory =
+  | 'cart_bootstrap_failed'
+  | 'no_promo_field'
+  | 'code_rejected'
+  | 'timeout'
+  | 'bot_blocked';
 
-export async function simulateCheckout(
-  merchantUrl: string,
-  promoCode: string,
-  proxy?: ProxyConfig,
-  timeoutMs: number = 35000
-): Promise<BrowserTestResult> {
-  const startTime = Date.now();
-  let page: Page | null = null;
+function categorized(category: ErrorCategory, detail: string): string {
+  return `[${category}] ${detail}`;
+}
 
+function detectMerchant(merchantUrl: string): 'nike' | 'adidas' | 'generic' {
   try {
-    const browser = await getBrowser();
-    page = await browser.newPage();
+    const host = new URL(merchantUrl).hostname.toLowerCase();
+    if (host.includes('nike.')) return 'nike';
+    if (host.includes('adidas.')) return 'adidas';
+  } catch {
+    /* fall through */
+  }
+  return 'generic';
+}
 
-    // ── Anti-detection ──
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
-    await page.setExtraHTTPHeaders({
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'DNT': '1',
-    });
-
-    // Override navigator.webdriver to avoid bot detection
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
-
-    // ── Viewport ──
-    await page.setViewport({ width: 1366, height: 768 });
-
-    // ── Proxy auth ──
-    if (proxy?.username && proxy?.password) {
-      await page.authenticate({
-        username: proxy.username,
-        password: proxy.password,
-      });
-    }
-
-    // ── Navigate to checkout/cart ──
-    const checkoutUrl = buildCheckoutUrl(merchantUrl);
-    console.log(`  → Navigating to: ${checkoutUrl}`);
-
-    await page.goto(checkoutUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: timeoutMs,
-    });
-
-    // Human-like pause after page load
-    await wait(1500, 3000);
-
-    // ── Find promo code input ──
-    const promoInput = await findPromoInput(page);
-
-    if (!promoInput) {
-      return {
-        success: false,
-        errorMessage:
-          'Empty cart or no promo field on /cart — item may be required before code can be tested',
-        pageLoadTime: Date.now() - startTime,
-      };
-    }
-
-    // ── Type the code with human-like delays ──
-    await promoInput.click({ clickCount: 3 }); // Select all existing text
-    await wait(200, 400);
-
-    // Type character by character with random delays
-    for (const char of promoCode) {
-      await promoInput.type(char, { delay: Math.floor(Math.random() * 80) + 40 });
-    }
-
-    await wait(400, 800);
-
-    // ── Click apply button ──
-    const applied = await clickApplyButton(page);
-
-    if (applied) {
-      // Wait for page to respond
-      await wait(2500, 4000);
-    }
-
-    // ── Extract result signals ──
-    const errorMessage = await extractErrorSignal(page);
-    if (errorMessage) {
-      return {
-        success: false,
-        errorMessage,
-        pageLoadTime: Date.now() - startTime,
-      };
-    }
-
-    const priceInfo = await extractPriceInfo(page);
-    const successSignal = await detectSuccessSignal(page);
-
-    if (priceInfo.discountDetected || successSignal) {
-      return {
-        success: true,
-        ...priceInfo,
-        discountText: priceInfo.discountText || 'Discount applied at checkout',
-        discountAmount: priceInfo.discountAmount,
-        pageLoadTime: Date.now() - startTime,
-      };
-    }
-
-    return {
-      success: false,
-      errorMessage: 'Code submitted but no discount signal detected',
-      pageLoadTime: Date.now() - startTime,
-      ...priceInfo,
-    };
-
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`  ✗ Checkout simulation error: ${errorMessage}`);
-
-    return {
-      success: false,
-      errorMessage: errorMessage.includes('timeout')
-        ? 'Page load timeout — store may be slow or blocking automation'
-        : errorMessage,
-      pageLoadTime: Date.now() - startTime,
-    };
-
-  } finally {
-    if (page) {
-      await page.close().catch(() => {});
-    }
+function originOf(merchantUrl: string): string {
+  try {
+    return new URL(merchantUrl).origin;
+  } catch {
+    return merchantUrl.replace(/\/$/, '');
   }
 }
 
 // ---------------------------------------------------------------------------
-// Build the right URL to start the checkout flow
+// Page setup helpers
 // ---------------------------------------------------------------------------
 
-function buildCheckoutUrl(merchantUrl: string): string {
-  try {
-    const url = new URL(merchantUrl);
+async function preparePage(page: Page, proxy?: ProxyConfig): Promise<void> {
+  await page.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  );
+  await page.setExtraHTTPHeaders({
+    'Accept-Language': 'en-US,en;q=0.9',
+    Accept:
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+    DNT: '1',
+  });
 
-    // If they gave us a cart/checkout URL already, use it
-    const alreadyCheckout = ['/checkout', '/cart', '/bag', '/basket', '/order'].some(
-      path => url.pathname.includes(path)
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
+
+  await page.setViewport({ width: 1366, height: 768 });
+
+  if (proxy?.username && proxy?.password) {
+    await page.authenticate({
+      username: proxy.username,
+      password: proxy.password,
+    });
+  }
+}
+
+async function detectBotBlock(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const title = (document.title || '').toLowerCase();
+    const body = (document.body?.innerText || '').toLowerCase().slice(0, 4000);
+    const signals = [
+      'access denied',
+      'attention required',
+      'cf-browser-verification',
+      'checking your browser',
+      'just a moment',
+      'enable javascript and cookies',
+      'bot detection',
+      'unusual traffic',
+      'verify you are human',
+      'are you a robot',
+      'perimeterx',
+      'blocked',
+    ];
+    if (signals.some(s => title.includes(s) || body.includes(s))) {
+      return document.title || 'Bot/challenge page detected';
+    }
+    // Cloudflare challenge iframe / turnstile markers
+    if (
+      document.querySelector('#challenge-form, .cf-challenge, iframe[src*="challenges.cloudflare"]')
+    ) {
+      return 'Cloudflare challenge detected';
+    }
+    return null;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Cart bootstrap — merchant-aware + generic fallback
+// ---------------------------------------------------------------------------
+
+async function clickFirstVisible(
+  page: Page,
+  selectors: string[]
+): Promise<boolean> {
+  for (const selector of selectors) {
+    try {
+      const els = await page.$$(selector);
+      for (const el of els) {
+        const visible = await el.isIntersectingViewport().catch(() => false);
+        if (!visible) continue;
+        await el.click();
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+async function clickByText(
+  page: Page,
+  phrases: string[],
+  tagSelector = 'a, button, span, div[role="button"]'
+): Promise<boolean> {
+  return page.evaluate(
+    (phrasesIn, tagSel) => {
+      const clickables = Array.from(document.querySelectorAll(tagSel));
+      for (const el of clickables) {
+        const text = (el.textContent || '').toLowerCase().replace(/\s+/g, ' ').trim();
+        if (
+          text.length > 0 &&
+          text.length < 80 &&
+          phrasesIn.some(p => text.includes(p))
+        ) {
+          (el as HTMLElement).click();
+          return true;
+        }
+      }
+      return false;
+    },
+    phrases,
+    tagSelector
+  );
+}
+
+async function selectAvailableSize(page: Page): Promise<void> {
+  // Nike / Adidas / generic size chips — skip disabled/out-of-stock
+  const clicked = await page.evaluate(() => {
+    const candidates = Array.from(
+      document.querySelectorAll(
+        [
+          'button[data-testid*="size" i]',
+          '[data-testid*="size" i] button',
+          'button[aria-label*="Size" i]',
+          'button[class*="size" i]',
+          'label[class*="size" i]',
+          'input[name*="size" i] + label',
+          '[role="radio"]',
+          'fieldset button',
+        ].join(',')
+      )
     );
-    if (alreadyCheckout) return merchantUrl;
+    for (const el of candidates) {
+      const html = el as HTMLElement;
+      const disabled =
+        html.hasAttribute('disabled') ||
+        html.getAttribute('aria-disabled') === 'true' ||
+        /out.?of.?stock|unavailable|disabled/i.test(
+          (html.className || '') + ' ' + (html.getAttribute('aria-label') || '')
+        );
+      if (disabled) continue;
+      const text = (html.textContent || '').trim();
+      // Prefer short size labels (M, L, 8, 9.5, etc.)
+      if (text.length > 0 && text.length <= 8) {
+        html.click();
+        return true;
+      }
+    }
+    // Fallback: any non-disabled size-ish button
+    for (const el of candidates) {
+      const html = el as HTMLElement;
+      if (html.hasAttribute('disabled')) continue;
+      html.click();
+      return true;
+    }
+    return false;
+  });
+  if (clicked) await wait(400, 800);
+}
 
-    // Otherwise try /cart first (most stores allow promo code at cart stage)
-    return `${url.origin}/cart`;
+async function addToBag(page: Page): Promise<boolean> {
+  await selectAvailableSize(page);
 
+  const selectors = [
+    'button[data-testid*="add-to-cart" i]',
+    'button[data-testid*="add-to-bag" i]',
+    'button[aria-label*="Add to Bag" i]',
+    'button[aria-label*="Add to Cart" i]',
+    'button[class*="add-to-cart" i]',
+    'button[class*="add-to-bag" i]',
+    '#add-to-cart',
+    'button[name*="add" i]',
+  ];
+  if (await clickFirstVisible(page, selectors)) {
+    await wait(1200, 2000);
+    return true;
+  }
+  if (
+    await clickByText(page, [
+      'add to bag',
+      'add to cart',
+      'add to basket',
+      'add to trolley',
+    ])
+  ) {
+    await wait(1200, 2000);
+    return true;
+  }
+  return false;
+}
+
+async function openFirstProductFromListing(page: Page): Promise<boolean> {
+  const productSelectors = [
+    'a[data-testid*="product" i]',
+    'a[href*="/t/"]', // Nike PDP pattern
+    'a[href*="/product/"]',
+    'a[href*="/dp/"]',
+    '[data-testid*="product-card" i] a',
+    '.product-card a',
+    'a[class*="product" i]',
+  ];
+  for (const selector of productSelectors) {
+    try {
+      const links = await page.$$(selector);
+      for (const link of links.slice(0, 8)) {
+        const href = await page.evaluate(el => (el as HTMLAnchorElement).href, link);
+        if (!href || href.includes('#') || /cart|checkout|login|help/i.test(href)) {
+          continue;
+        }
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}),
+          link.click(),
+        ]);
+        await wait(1000, 2000);
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+async function bootstrapNike(page: Page, origin: string, navTimeout: number): Promise<void> {
+  // Cheap/in-stock entry: men's sale / lifestyle — avoid empty cart
+  const startUrls = [
+    `${origin}/w/sale`,
+    `${origin}/w`,
+    `${origin}/`,
+  ];
+  let loaded = false;
+  for (const url of startUrls) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeout });
+      await wait(1500, 2500);
+      const blocked = await detectBotBlock(page);
+      if (blocked) {
+        throw new Error(categorized('bot_blocked', blocked));
+      }
+      loaded = true;
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('[bot_blocked]')) throw err;
+      continue;
+    }
+  }
+  if (!loaded) {
+    throw new Error(categorized('cart_bootstrap_failed', 'Nike PLP failed to load'));
+  }
+
+  // Dismiss cookie / locale banners if present
+  await clickByText(page, ['accept all', 'accept cookies', 'agree', 'got it']).catch(() => {});
+  await wait(400, 800);
+
+  if (!(await openFirstProductFromListing(page))) {
+    throw new Error(categorized('cart_bootstrap_failed', 'Nike: no product link found on PLP'));
+  }
+
+  if (!(await addToBag(page))) {
+    throw new Error(categorized('cart_bootstrap_failed', 'Nike: Add to Bag failed (size/stock?)'));
+  }
+}
+
+async function bootstrapAdidas(page: Page, origin: string, navTimeout: number): Promise<void> {
+  const startUrls = [
+    `${origin}/us/sale`,
+    `${origin}/us`,
+    `${origin}/`,
+  ];
+  let loaded = false;
+  for (const url of startUrls) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeout });
+      await wait(1500, 2500);
+      const blocked = await detectBotBlock(page);
+      if (blocked) throw new Error(categorized('bot_blocked', blocked));
+      loaded = true;
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('[bot_blocked]')) throw err;
+      continue;
+    }
+  }
+  if (!loaded) {
+    throw new Error(categorized('cart_bootstrap_failed', 'Adidas PLP failed to load'));
+  }
+
+  await clickByText(page, ['accept all', 'accept cookies', 'agree', 'got it']).catch(() => {});
+  await wait(400, 800);
+
+  if (!(await openFirstProductFromListing(page))) {
+    throw new Error(categorized('cart_bootstrap_failed', 'Adidas: no product link found'));
+  }
+  if (!(await addToBag(page))) {
+    throw new Error(categorized('cart_bootstrap_failed', 'Adidas: Add to Bag failed'));
+  }
+}
+
+async function bootstrapGeneric(page: Page, merchantUrl: string, navTimeout: number): Promise<void> {
+  const origin = originOf(merchantUrl);
+  const startUrls = [
+    merchantUrl,
+    `${origin}/collections/all`,
+    `${origin}/shop`,
+    `${origin}/sale`,
+    `${origin}/`,
+  ];
+
+  let loaded = false;
+  for (const url of startUrls) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeout });
+      await wait(1200, 2200);
+      const blocked = await detectBotBlock(page);
+      if (blocked) throw new Error(categorized('bot_blocked', blocked));
+      loaded = true;
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('[bot_blocked]')) throw err;
+      continue;
+    }
+  }
+  if (!loaded) {
+    throw new Error(categorized('cart_bootstrap_failed', 'Store PLP/home failed to load'));
+  }
+
+  await clickByText(page, ['accept all', 'accept cookies', 'agree', 'got it']).catch(() => {});
+
+  // If already on a PDP with add-to-cart, use it; else open a product
+  const hasAdd = await page.$(
+    'button[class*="add-to" i], button[data-testid*="add-to" i], #add-to-cart, button[name*="add" i]'
+  );
+  if (!hasAdd) {
+    if (!(await openFirstProductFromListing(page))) {
+      throw new Error(
+        categorized('cart_bootstrap_failed', 'No product found to add to cart')
+      );
+    }
+  }
+
+  if (!(await addToBag(page))) {
+    throw new Error(
+      categorized('cart_bootstrap_failed', 'Add to cart/bag failed — item or size unavailable')
+    );
+  }
+}
+
+async function bootstrapCart(
+  page: Page,
+  merchantUrl: string,
+  navTimeout: number
+): Promise<void> {
+  const merchant = detectMerchant(merchantUrl);
+  const origin = originOf(merchantUrl);
+  console.log(`  → bootstrapCart (${merchant}): ${origin}`);
+
+  if (merchant === 'nike') {
+    await bootstrapNike(page, origin, navTimeout);
+  } else if (merchant === 'adidas') {
+    await bootstrapAdidas(page, origin, navTimeout);
+  } else {
+    await bootstrapGeneric(page, merchantUrl, navTimeout);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Navigate toward checkout (stop BEFORE payment / card details)
+// ---------------------------------------------------------------------------
+
+async function preferGuestCheckout(page: Page): Promise<void> {
+  const guestPhrases = [
+    'guest checkout',
+    'checkout as guest',
+    'continue as guest',
+    'guest',
+    'continue without',
+  ];
+  if (await clickByText(page, guestPhrases)) {
+    await wait(1000, 1800);
+  }
+}
+
+/** HARD LAW: never interact with card/payment fields. */
+async function isOnPaymentStep(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const cardHints = [
+      'input[name*="card" i]',
+      'input[autocomplete="cc-number"]',
+      'input[name*="credit" i]',
+      'iframe[name*="card" i]',
+      'iframe[src*="stripe" i]',
+      'iframe[src*="braintree" i]',
+      '[data-testid*="card-number" i]',
+    ];
+    for (const sel of cardHints) {
+      if (document.querySelector(sel)) return true;
+    }
+    const body = (document.body?.innerText || '').toLowerCase();
+    // Promo near payment is OK; "place order" alone is not a stop signal yet
+    return /card number|cvv|cvc|expir(y|ation)|payment details/.test(body);
+  });
+}
+
+async function navigateTowardCheckout(
+  page: Page,
+  merchantUrl: string,
+  navTimeout: number
+): Promise<void> {
+  const origin = originOf(merchantUrl);
+  const bagUrls = [
+    `${origin}/cart`,
+    `${origin}/bag`,
+    `${origin}/checkout/cart`,
+    `${origin}/us/cart`,
+    `${origin}/gb/cart`,
+  ];
+
+  // Try bag icon / "View bag" first
+  await clickByText(page, ['view bag', 'view cart', 'go to bag', 'go to cart', 'bag (', 'cart (']).catch(
+    () => {}
+  );
+  await wait(800, 1400);
+
+  // If still not on cart, navigate directly
+  const path = page.url().toLowerCase();
+  if (!['/cart', '/bag', '/basket', '/checkout'].some(p => path.includes(p))) {
+    for (const url of bagUrls) {
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeout });
+        await wait(1000, 1800);
+        break;
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  const blocked = await detectBotBlock(page);
+  if (blocked) {
+    throw new Error(categorized('bot_blocked', blocked));
+  }
+
+  // Proceed toward checkout (guest when possible)
+  const checkoutClicked =
+    (await clickFirstVisible(page, [
+      'a[href*="checkout" i]',
+      'button[data-testid*="checkout" i]',
+      'button[class*="checkout" i]',
+      'a[class*="checkout" i]',
+    ])) || (await clickByText(page, ['checkout', 'check out', 'proceed to checkout']));
+
+  if (checkoutClicked) {
+    await wait(1500, 2500);
+    await preferGuestCheckout(page);
+  }
+
+  // HARD LAW: if we landed on payment with card fields, do NOT fill them.
+  // Promo fields often appear on this step — that is intentional; we only apply promo.
+  if (await isOnPaymentStep(page)) {
+    console.log('  → At payment-adjacent step (promo only; will not submit card/order)');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Abandon cart — never place order
+// ---------------------------------------------------------------------------
+
+async function abandonCart(page: Page, merchantUrl: string): Promise<void> {
+  console.log('  → abandonCart (never place order)');
+  try {
+    // Prefer remove/empty controls if present
+    await clickByText(page, [
+      'remove',
+      'remove item',
+      'delete',
+      'empty bag',
+      'empty cart',
+      'clear cart',
+    ]).catch(() => {});
+    await wait(400, 800);
+
+    // Navigate away from checkout to abandon
+    const origin = originOf(merchantUrl);
+    await page.goto(`${origin}/cart`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await clickByText(page, ['remove', 'empty bag', 'empty cart', 'clear cart']).catch(() => {});
   } catch {
-    // If URL parsing fails, return as-is
-    return merchantUrl;
+    /* best-effort abandon */
   }
 }
 
@@ -221,31 +582,26 @@ function buildCheckoutUrl(merchantUrl: string): string {
 // Find promo code input field
 // ---------------------------------------------------------------------------
 
-async function findPromoInput(page: Page) {
+async function findPromoInput(page: Page): Promise<ElementHandle<Element> | null> {
   const selectors = [
-    // By name attribute
     'input[name*="promo" i]',
     'input[name*="coupon" i]',
     'input[name*="discount" i]',
     'input[name*="voucher" i]',
     'input[name*="gift" i]',
     'input[name*="code" i]',
-    // By ID
     'input[id*="promo" i]',
     'input[id*="coupon" i]',
     'input[id*="discount" i]',
     'input[id*="voucher" i]',
-    // By placeholder
     'input[placeholder*="promo" i]',
     'input[placeholder*="coupon" i]',
     'input[placeholder*="discount" i]',
     'input[placeholder*="code" i]',
     'input[placeholder*="voucher" i]',
-    // By aria-label
     'input[aria-label*="promo" i]',
     'input[aria-label*="coupon" i]',
     'input[aria-label*="discount" i]',
-    // By data attributes
     'input[data-testid*="coupon" i]',
     'input[data-testid*="promo" i]',
   ];
@@ -262,7 +618,6 @@ async function findPromoInput(page: Page) {
     }
   }
 
-  // Try to expand a hidden promo section (some stores hide it behind "Have a code?")
   const expandTriggers = [
     'a[class*="promo" i]',
     'button[class*="promo" i]',
@@ -280,7 +635,6 @@ async function findPromoInput(page: Page) {
       if (el) {
         await el.click();
         await wait(800, 1200);
-        // Try finding the input again after expansion
         for (const selector of selectors) {
           const input = await page.$(selector).catch(() => null);
           if (input) return input;
@@ -291,7 +645,6 @@ async function findPromoInput(page: Page) {
     }
   }
 
-  // Text-based expanders: "Have a promo code?", "Enter coupon", etc.
   try {
     const clicked = await page.evaluate(() => {
       const phrases = [
@@ -305,6 +658,8 @@ async function findPromoInput(page: Page) {
         'discount code',
         'got a code',
         'use a coupon',
+        'enter code',
+        'add a code',
       ];
       const clickables = Array.from(
         document.querySelectorAll('a, button, span, summary, div[role="button"]')
@@ -326,18 +681,13 @@ async function findPromoInput(page: Page) {
       }
     }
   } catch {
-    // ignore — fall through to null
+    /* ignore */
   }
 
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Click the Apply button
-// ---------------------------------------------------------------------------
-
 async function clickApplyButton(page: Page): Promise<boolean> {
-  // Try common selectors first
   const selectors = [
     'button[type="submit"][class*="promo" i]',
     'button[type="submit"][class*="coupon" i]',
@@ -358,13 +708,21 @@ async function clickApplyButton(page: Page): Promise<boolean> {
     }
   }
 
-  // Fallback: find button by visible text content
-  const clicked = await page.evaluate(() => {
+  return page.evaluate(() => {
     const applyTexts = ['apply', 'submit', 'redeem', 'use code', 'go'];
     const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-
     for (const btn of buttons) {
-      const text = (btn.textContent || (btn as HTMLInputElement).value || '').toLowerCase().trim();
+      const text = (
+        btn.textContent ||
+        (btn as HTMLInputElement).value ||
+        ''
+      )
+        .toLowerCase()
+        .trim();
+      // Never click place-order / pay / buy
+      if (/place order|pay now|buy now|complete purchase|submit order/.test(text)) {
+        continue;
+      }
       if (applyTexts.some(t => text.includes(t))) {
         (btn as HTMLElement).click();
         return true;
@@ -372,13 +730,7 @@ async function clickApplyButton(page: Page): Promise<boolean> {
     }
     return false;
   });
-
-  return clicked;
 }
-
-// ---------------------------------------------------------------------------
-// Detect error signals (code rejected, invalid, expired)
-// ---------------------------------------------------------------------------
 
 async function extractErrorSignal(page: Page): Promise<string | null> {
   return page.evaluate(() => {
@@ -393,9 +745,17 @@ async function extractErrorSignal(page: Page): Promise<string | null> {
     ];
 
     const errorKeywords = [
-      'invalid', 'expired', 'not valid', 'cannot be applied',
-      'does not apply', 'not found', 'incorrect', 'not recognized',
-      'already used', 'maximum discount', 'not applicable',
+      'invalid',
+      'expired',
+      'not valid',
+      'cannot be applied',
+      'does not apply',
+      'not found',
+      'incorrect',
+      'not recognized',
+      'already used',
+      'maximum discount',
+      'not applicable',
     ];
 
     for (const selector of errorSelectors) {
@@ -408,7 +768,6 @@ async function extractErrorSignal(page: Page): Promise<string | null> {
       }
     }
 
-    // Also check body text for very prominent error messages
     const bodyText = document.body.innerText.toLowerCase();
     for (const kw of errorKeywords) {
       if (bodyText.includes(kw)) {
@@ -420,25 +779,25 @@ async function extractErrorSignal(page: Page): Promise<string | null> {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Detect success signal (discount was applied)
-// ---------------------------------------------------------------------------
-
 async function detectSuccessSignal(page: Page): Promise<boolean> {
   return page.evaluate(() => {
     const successKeywords = [
-      'discount applied', 'promo applied', 'coupon applied', 'code applied',
-      'code accepted', 'savings applied', 'you saved', 'discount:',
-      'promotional discount', 'voucher applied', 'coupon code applied',
+      'discount applied',
+      'promo applied',
+      'coupon applied',
+      'code applied',
+      'code accepted',
+      'savings applied',
+      'you saved',
+      'discount:',
+      'promotional discount',
+      'voucher applied',
+      'coupon code applied',
     ];
     const bodyText = document.body.innerText.toLowerCase();
     return successKeywords.some(kw => bodyText.includes(kw));
   });
 }
-
-// ---------------------------------------------------------------------------
-// Extract price / discount information
-// ---------------------------------------------------------------------------
 
 async function extractPriceInfo(page: Page): Promise<{
   originalPrice?: string;
@@ -469,7 +828,6 @@ async function extractPriceInfo(page: Page): Promise<{
           const text = el.textContent.trim();
           if (text) {
             discountText = text.substring(0, 100);
-            // Try to extract a dollar/percentage amount
             const dollarMatch = text.match(/[-−]?\$[\d,]+\.?\d*/);
             const percentMatch = text.match(/\d+%/);
             if (dollarMatch) discountAmount = dollarMatch[0];
@@ -479,20 +837,272 @@ async function extractPriceInfo(page: Page): Promise<{
         }
       }
 
-      // Look for strikethrough prices (original vs new)
-      const strikethroughs = document.querySelectorAll('s, del, [class*="strike" i], [class*="original" i]');
+      const strikethroughs = document.querySelectorAll(
+        's, del, [class*="strike" i], [class*="original" i]'
+      );
       let originalPrice = '';
       for (const el of strikethroughs) {
         const match = (el.textContent || '').match(/\$[\d,]+\.?\d*/);
-        if (match) { originalPrice = match[0]; break; }
+        if (match) {
+          originalPrice = match[0];
+          break;
+        }
       }
 
       const discountDetected = !!(discountText || discountAmount);
-
       return { originalPrice, discountText, discountAmount, discountDetected };
     });
   } catch {
     return {};
+  }
+}
+
+async function applyCodeOnPage(
+  page: Page,
+  promoCode: string
+): Promise<BrowserTestResult & { pageLoadTime: number }> {
+  const start = Date.now();
+  const promoInput = await findPromoInput(page);
+
+  if (!promoInput) {
+    return {
+      success: false,
+      errorMessage: categorized(
+        'no_promo_field',
+        'Promo field not found near checkout/payment step — cart may be empty or wrong stage'
+      ),
+      pageLoadTime: Date.now() - start,
+    };
+  }
+
+  await promoInput.click({ clickCount: 3 });
+  await wait(200, 400);
+
+  // Clear existing value then type
+  await promoInput.click({ clickCount: 3 });
+  for (const char of promoCode) {
+    await promoInput.type(char, { delay: Math.floor(Math.random() * 80) + 40 });
+  }
+  await wait(400, 800);
+
+  const applied = await clickApplyButton(page);
+  if (applied) {
+    await wait(2500, 4000);
+  }
+
+  const errorMessage = await extractErrorSignal(page);
+  if (errorMessage) {
+    return {
+      success: false,
+      errorMessage: categorized('code_rejected', errorMessage),
+      pageLoadTime: Date.now() - start,
+    };
+  }
+
+  const priceInfo = await extractPriceInfo(page);
+  const successSignal = await detectSuccessSignal(page);
+
+  if (priceInfo.discountDetected || successSignal) {
+    return {
+      success: true,
+      ...priceInfo,
+      discountText: priceInfo.discountText || 'Discount applied at checkout',
+      discountAmount: priceInfo.discountAmount,
+      pageLoadTime: Date.now() - start,
+    };
+  }
+
+  return {
+    success: false,
+    errorMessage: categorized(
+      'code_rejected',
+      'Code submitted but no discount signal detected'
+    ),
+    pageLoadTime: Date.now() - start,
+    ...priceInfo,
+  };
+}
+
+async function clearPromoField(page: Page): Promise<void> {
+  try {
+    const input = await findPromoInput(page);
+    if (!input) return;
+    await input.click({ clickCount: 3 });
+    await page.keyboard.press('Backspace');
+    await wait(200, 400);
+  } catch {
+    /* ignore */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main checkout simulation (single code — full human path)
+// ---------------------------------------------------------------------------
+
+export async function simulateCheckout(
+  merchantUrl: string,
+  promoCode: string,
+  proxy?: ProxyConfig,
+  timeoutMs: number = 60000
+): Promise<BrowserTestResult> {
+  const startTime = Date.now();
+  let page: Page | null = null;
+  const navTimeout = Math.min(timeoutMs, 45000);
+
+  try {
+    const browser = await getBrowser();
+    page = await browser.newPage();
+    await preparePage(page, proxy);
+
+    await bootstrapCart(page, merchantUrl, navTimeout);
+    await navigateTowardCheckout(page, merchantUrl, navTimeout);
+
+    const blocked = await detectBotBlock(page);
+    if (blocked) {
+      return {
+        success: false,
+        errorMessage: categorized('bot_blocked', blocked),
+        pageLoadTime: Date.now() - startTime,
+      };
+    }
+
+    const result = await applyCodeOnPage(page, promoCode);
+    await abandonCart(page, merchantUrl);
+
+    return {
+      ...result,
+      pageLoadTime: Date.now() - startTime,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`  ✗ Checkout simulation error: ${errorMessage}`);
+
+    // Preserve categorized errors thrown from helpers
+    if (/^\[(cart_bootstrap_failed|no_promo_field|code_rejected|timeout|bot_blocked)\]/.test(errorMessage)) {
+      return {
+        success: false,
+        errorMessage,
+        pageLoadTime: Date.now() - startTime,
+      };
+    }
+
+    const lower = errorMessage.toLowerCase();
+    let categorizedMsg: string;
+    if (lower.includes('timeout') || lower.includes('navigation')) {
+      categorizedMsg = categorized(
+        'timeout',
+        'Page load timeout — store may be slow or blocking automation'
+      );
+    } else if (
+      lower.includes('blocked') ||
+      lower.includes('challenge') ||
+      lower.includes('access denied')
+    ) {
+      categorizedMsg = categorized('bot_blocked', errorMessage);
+    } else if (lower.includes('cart') || lower.includes('bag') || lower.includes('bootstrap')) {
+      categorizedMsg = categorized('cart_bootstrap_failed', errorMessage);
+    } else {
+      categorizedMsg = errorMessage;
+    }
+
+    return {
+      success: false,
+      errorMessage: categorizedMsg,
+      pageLoadTime: Date.now() - startTime,
+    };
+  } finally {
+    if (page) {
+      await page.close().catch(() => {});
+    }
+  }
+}
+
+/**
+ * Session-based batch: bootstrap cart once, apply each code at checkout-stage
+ * promo field, clear between codes, abandon at end. Never completes purchase.
+ */
+export async function simulateCheckoutBatch(
+  merchantUrl: string,
+  promoCodes: string[],
+  proxy?: ProxyConfig,
+  timeoutMsPerCode: number = 60000
+): Promise<BrowserTestResult[]> {
+  const results: BrowserTestResult[] = [];
+  let page: Page | null = null;
+  const navTimeout = Math.min(timeoutMsPerCode, 45000);
+  const sessionStart = Date.now();
+
+  try {
+    const browser = await getBrowser();
+    page = await browser.newPage();
+    await preparePage(page, proxy);
+
+    try {
+      await bootstrapCart(page, merchantUrl, navTimeout);
+      await navigateTowardCheckout(page, merchantUrl, navTimeout);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const failAll = promoCodes.map(() => ({
+        success: false,
+        errorMessage: msg.startsWith('[')
+          ? msg
+          : categorized('cart_bootstrap_failed', msg),
+        pageLoadTime: Date.now() - sessionStart,
+      }));
+      return failAll;
+    }
+
+    const blocked = await detectBotBlock(page);
+    if (blocked) {
+      return promoCodes.map(() => ({
+        success: false,
+        errorMessage: categorized('bot_blocked', blocked),
+        pageLoadTime: Date.now() - sessionStart,
+      }));
+    }
+
+    for (let i = 0; i < promoCodes.length; i++) {
+      const codeStart = Date.now();
+      try {
+        const result = await applyCodeOnPage(page, promoCodes[i]);
+        results.push({
+          ...result,
+          pageLoadTime: Date.now() - codeStart,
+        });
+        await clearPromoField(page);
+        if (i < promoCodes.length - 1) {
+          await wait(500, 1200);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        results.push({
+          success: false,
+          errorMessage: msg.includes('timeout')
+            ? categorized('timeout', msg)
+            : msg,
+          pageLoadTime: Date.now() - codeStart,
+        });
+      }
+    }
+
+    await abandonCart(page, merchantUrl);
+    return results;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    while (results.length < promoCodes.length) {
+      results.push({
+        success: false,
+        errorMessage: errorMessage.includes('timeout')
+          ? categorized('timeout', errorMessage)
+          : errorMessage,
+        pageLoadTime: Date.now() - sessionStart,
+      });
+    }
+    return results;
+  } finally {
+    if (page) {
+      await page.close().catch(() => {});
+    }
   }
 }
 

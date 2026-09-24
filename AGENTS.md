@@ -37,21 +37,21 @@ Enforce path is on [PR #4](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/4
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────┐
 │                      FRONTEND (Vite/React)                  │
 │  HeroSearchBar → DashboardWorkspace → ResultsDisplay       │
 │  (verify-only display: PR #4 — pending merge)               │
-└─────────────────────────────────┬───────────────────────────┘
+└────────────────────────────────┴──────────────────────────────┘
                                   │
                                   ▼
-┌─────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────┐
 │                   searchService.ts                          │
 │  Orchestrates: Discovery → Verification → Display         │
-└─────────────────────────────────┬───────────────────────────┘
+└────────────────────────────────┴──────────────────────────────┘
                                   │
-          ┌───────────────────────┴───────────────────────┐
+          ┌──────────────────────┴───────────────────────┐
           ▼                                               ▼
-┌─────────────────────┐                     ┌─────────────────────┐
+┌──────────────────────┐                     ┌──────────────────────┐
 │   nvidiaService     │                     │   apiService.ts      │
 │   (Discovery Only)  │                     │   (Backend Verifier) │
 │                     │                     │                     │
@@ -60,9 +60,9 @@ Enforce path is on [PR #4](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/4
 │ • checkGlitch()     │                     │ • Geo-proxy testing  │
 │                     │                     │                     │
 │ Uses NVIDIA NIM      │                     │ Puppeteer + proxies │
-└─────────────────────┘                     └──────────┬──────────┘
+└──────────────────────┘                     └──────────┴──────────┘
                                                         │
-                     ┌──────────────────────────────────┼────────────────────────┐
+                     ┌─────────────────────────────────┼───────────────────────┐
                      ▼                                  ▼                        ▼
             ┌──────────────┐                   ┌──────────────┐          ┌──────────────┐
             │  US Region   │                   │  UAE Region  │          │  UK Region   │
@@ -79,7 +79,8 @@ Pending on PR branches (not `main`): Stripe + Firestore persist (PR #1), checkou
 
 ### 2. Verification Phase (Backend)
 - Headless browser automation (Puppeteer)
-- Checkout flow with test cart; geo via residential proxies when configured
+- Human path: add item → checkout-stage promo → abandon (never paid purchase)
+- Geo via residential proxies when configured
 - Outcomes: verified | failed | expired | error
 
 ### 3. Display Phase (Frontend)
@@ -196,11 +197,20 @@ npm install && npm run dev
 
 ## Verify vs AgentMail (OTP)
 
-- **Verify** = Puppeteer cart/checkout apply (`browserBot` → `/cart`). Empty-cart timeouts mean no promo field until an item is in cart — not an email problem.
-- **AgentMail** inbox `discount-hunter@agentmail.to` is for **future OTP only** until `AGENTMAIL_API_KEY` is set on Render **and** `fetchLatestOtp` is implemented. Do not expect AgentMail to fix empty-cart or page-load timeouts.
+- **Verify** = human-shopper path in Puppeteer (`browserBot`):
+  1. `bootstrapCart(merchant)` — add a cheap/in-stock item (Nike/Adidas helpers + generic PLP/PDP fallback)
+  2. Navigate toward checkout (prefer **guest**)
+  3. Find promo field near the payment step (just BEFORE card details)
+  4. Apply each candidate code → accept vs reject
+  5. `abandonCart` — **NEVER** type/submit card details, **NEVER** place order
+- Empty-cart / missing promo used to hide the field when we jumped straight to `/cart`. Cart bootstrap is now required before promo apply.
+- Categorized `errorMessage` prefixes: `cart_bootstrap_failed` | `no_promo_field` | `code_rejected` | `timeout` | `bot_blocked`
+- Batch uses one cart session when possible (`simulateCheckoutBatch`); per-code timeout ~60s; batch budget ~5 min; frontend verifier abort ~6 min.
+- Chromium: `PUPPETEER_EXECUTABLE_PATH` / `CHROME_PATH` or Puppeteer bundled — **never** Windows Chrome default (Render/Linux).
+- **AgentMail** inbox `discount-hunter@agentmail.to` is for **future OTP only** until `AGENTMAIL_API_KEY` is set on Render **and** `fetchLatestOtp` is implemented. Do not expect AgentMail to fix cart bootstrap, Nike bot-blocks, or page-load timeouts.
 
 ## Notes
 
-- Real verification benefits from residential proxies for geo-targeting
-- Without proxies, verification still runs but without geo-specific results
+- Real verification benefits from residential proxies for geo-targeting (Nike often bot-blocks datacenter IPs on Render free tier)
+- Without proxies, verification still runs but without geo-specific results and higher bot-block risk
 - See [MIGRATION_TODO.md](./MIGRATION_TODO.md) for DoD gates before launch
