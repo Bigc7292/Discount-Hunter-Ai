@@ -32,7 +32,17 @@ const FALSE_POSITIVE_PATTERNS = [
 ];
 
 function isFalsePositive(code: string): boolean {
-  return FALSE_POSITIVE_PATTERNS.some(p => p.test(code));
+  if (FALSE_POSITIVE_PATTERNS.some(p => p.test(code))) return true;
+
+  // URL path / percent-encoding junk from aggregator markdown (e.g. %2Fview → 2FVIEW)
+  if (/^2F[A-Z0-9]{2,}$/i.test(code)) return true;
+  if (/^(WWW|VIEW|HELP|SHOP|US|UK|EU|MENS|WOMENS|STUDENT|PROMO|COUPONLIST|COUPON|DEALS|SALE)$/i.test(code)) return true;
+
+  // Pure path-segment lookalikes with no digit (real promos usually mix letters+digits)
+  // Keep digit-bearing codes; reject all-letter scraps longer than 8 that look like nav labels
+  if (!/[0-9]/.test(code) && code.length >= 8 && /^(?:[A-Z]+)(?:LIST|PAGE|HOME|CART|BAG)?$/.test(code)) return true;
+
+  return false;
 }
 
 // ── Stage 1: Regex extraction ─────────────────────────────────────────────────

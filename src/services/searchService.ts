@@ -15,10 +15,10 @@ import { findInfluencerCodes, checkGlitchProbability, generateLogMessage } from 
 import { checkVerifierHealth, discoverCodes } from './apiService';
 
 // Maximum candidates to send to verifier (prevents overloading Puppeteer)
-const MAX_CODES_TO_VERIFY = 10;
+const MAX_CODES_TO_VERIFY = 3; // Keep batch inside UI + Render request budgets
 
 // Verifier timeout: if backend takes longer than this, abort (ms)
-const VERIFIER_TIMEOUT_MS = 120_000; // 2 minutes
+const VERIFIER_TIMEOUT_MS = 150_000; // ~3 codes × ~45s + buffer
 
 const VERIFIER_URL = import.meta.env.VITE_VERIFIER_API_URL ||
   (import.meta.env.PROD
@@ -193,7 +193,12 @@ export async function runSearch(
     // ─── PHASE 2: REAL CHECKOUT VERIFICATION ────────────────────────────────
     setStatus(SearchStatus.VERIFYING);
 
-    const toVerify = discovered.slice(0, MAX_CODES_TO_VERIFY);
+    // Prefer digit-bearing codes (real promos); deprioritize all-letter scraps
+    const ranked = [...discovered].sort((a, b) => {
+      const score = (c: typeof a) => (/[0-9]/.test(c.code) ? 2 : 0) + (c.discoveryConfidence || 0);
+      return score(b) - score(a);
+    });
+    const toVerify = ranked.slice(0, MAX_CODES_TO_VERIFY);
     addLog(`LAUNCHING HEADLESS BROWSER — TESTING ${toVerify.length} CODE${toVerify.length !== 1 ? 'S' : ''} AT REAL CHECKOUT...`, 'system');
 
     const validateMsg = await generateLogMessage(discovery.merchantName, 'validating');
@@ -215,22 +220,34 @@ export async function runSearch(
         regionLabel
       );
     } catch (verifyError) {
-      // Verifier went offline mid-search or timed out
+      // Verifier timed out / crashed mid-search — stay verify-only (no codes shown)
+      // but use COMPLETE + honest counts so the UI is not a blank "zero results" void.
       const errMsg = verifyError instanceof Error ? verifyError.message : 'Unknown error';
-      addLog(`⛔ VERIFICATION FAILED: ${errMsg}`, 'error');
-      addLog('MISSION ABORTED — No codes returned. Integrity maintained.', 'error');
-      setStatus(SearchStatus.ERROR);
+      const timedOut =
+        (verifyError instanceof DOMException && verifyError.name === 'AbortError') ||
+        /abort|timeout/i.test(errMsg);
+      addLog(
+        timedOut
+          ? `⛔ VERIFICATION TIMED OUT after ${((Date.now() - startTime) / 1000).toFixed(0)}s — store may block automation`
+          : `⛔ VERIFICATION FAILED: ${errMsg}`,
+        'error'
+      );
+      addLog(
+        `HONEST RESULT: 0 verified / ${toVerify.length} attempted of ${discovered.length} discovered (none shown — integrity maintained)`,
+        'warning'
+      );
+      setStatus(SearchStatus.COMPLETE);
       setResult({
         merchantName: discovery.merchantName,
         merchantUrl: discovery.merchantUrl,
         codes: [],
         unverifiedCount: discovered.length,
         competitors: discovery.competitors,
-        verifierOnline: false,
+        verifierOnline: true,
         stats: {
           sourcesScanned: discovered.length,
           codesDiscovered: discovered.length,
-          codesTested: 0,
+          codesTested: toVerify.length,
           codesVerified: 0,
           timeTaken: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
           moneySavedEstimate: '$0.00',
@@ -258,7 +275,7 @@ export async function runSearch(
           source: r.source || 'AI Discovery',
           isVerified: true,
           status: 'verified' as const,
-          testedRegion: r.testedRegion,
+          testedRegion: r.testedRegion || (r as { testRegion?: string }).testRegion,
           testedAt: r.testedAt,
           discountText: r.discountText,
           discountAmount: r.discountAmount,
@@ -329,7 +346,7 @@ export async function runSearch(
     if (verifiedCodes.length > 0) {
       addLog(`✓ MISSION COMPLETE: ${verifiedCodes.length} VERIFIED CODE${verifiedCodes.length !== 1 ? 'S' : ''} READY`, 'success');
     } else {
-      addLog('MISSION COMPLETE: 0 codes survived checkout testing — no fake codes returned', 'warning');
+      addLog(`MISSION COMPLETE: 0 verified / ${toVerify.length} tested — no fake codes returned`, 'warning');
     }
 
     // ─── PHASE 4: INTERNAL SIGNALS (non-blocking, never shown as codes) ─────

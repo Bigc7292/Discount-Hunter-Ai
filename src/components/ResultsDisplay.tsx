@@ -161,12 +161,17 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
           <div className="cyber-glass border-hunter-border p-10 text-center rounded-xl">
             <XCircle className="text-hunter-muted mx-auto mb-4" size={36} />
             <h3 className="text-white font-display font-bold uppercase italic text-lg mb-2">
-              Zero Codes Verified
+              0 Verified / {testedCount || discoveredCount} Tested
             </h3>
             <p className="text-hunter-muted font-mono text-xs leading-relaxed max-w-sm mx-auto">
-              Our headless browser tested{' '}
-              {testedCount > 0 ? `${testedCount} candidate${testedCount !== 1 ? 's' : ''}` : 'the discovered codes'}{' '}
-              at the real checkout page. None applied successfully.
+              {discoveredCount > 0
+                ? `Discovered ${discoveredCount} candidate${discoveredCount !== 1 ? 's' : ''}. `
+                : ''}
+              Checkout simulation tested{' '}
+              {testedCount > 0
+                ? `${testedCount} code${testedCount !== 1 ? 's' : ''}`
+                : 'candidates'}
+              {' '}at the real store — none applied. Unverified codes are never shown.
             </p>
             <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg
                             bg-hunter-green/5 border border-hunter-green/20 text-hunter-green/70
@@ -176,7 +181,7 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
             </div>
             {result.unverifiedCount !== undefined && result.unverifiedCount > 0 && (
               <p className="text-hunter-muted/50 text-[10px] font-mono mt-4">
-                {result.unverifiedCount} candidate{result.unverifiedCount !== 1 ? 's' : ''} were rejected at checkout (not shown).
+                {result.unverifiedCount} candidate{result.unverifiedCount !== 1 ? 's' : ''} failed or were not retested (not shown).
               </p>
             )}
           </div>
