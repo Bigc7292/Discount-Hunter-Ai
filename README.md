@@ -50,11 +50,11 @@ Backend (separate terminal):
 cd backend && npm install && cp .env.example .env && npm run dev
 ```
 
-Env key names (values stay local / host secrets): see `.env.example` and `backend/.env.example`. **Discovery keys** (add to backend `.env`): `SERPER_API_KEY` (add first), `TAVILY_API_KEY`, then rely on **Jina Reader (no key)**; leave `ZERNIO_*` empty for **zero Zernio cost** (optional/paused — see [DISCOVERY_WORK_TREE.md §3a](./DISCOVERY_WORK_TREE.md)); `FIRECRAWL_API_KEY` (optional), `NVIDIA_API_KEY` (optional LLM extract). **Free path:** Serper + Tavily + Jina; social research via Agent-Reach is docs-only for now. Launch-PR keys include `VITE_STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_LIFETIME_PRICE_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `AGENTMAIL_INBOX_EMAIL`, `AGENTMAIL_API_KEY`, and rate-limit / ledger keys.
+Env key names (values stay local / host secrets): see `.env.example` and `backend/.env.example`. **Discovery keys** (add to backend `.env`): `SERPER_API_KEY` (add first), `TAVILY_API_KEY`, then rely on **Jina Reader (no key)**; leave `ZERNIO_*` empty for **zero Zernio cost** (optional/paused); Agent-Reach Stage C is **wired** (`AGENT_REACH_ENABLED=1` default — Exa MCP zero-config; optional CLIs/cookies — see [DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md)); `FIRECRAWL_API_KEY` (optional), `NVIDIA_API_KEY` (optional LLM extract). **Free path:** Serper + Tavily + Jina + Agent-Reach/Exa; Zernio skipped when key absent. Launch-PR keys include `VITE_STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_LIFETIME_PRICE_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `AGENTMAIL_INBOX_EMAIL`, `AGENTMAIL_API_KEY`, and rate-limit / ledger keys.
 
 ## Docs
 
-* [DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md) — **discovery stages** (Serper/Tavily/Jina; Zernio optional/cost-paused; Firecrawl optional), free/low-cost social layer research (Agent-Reach), env keys; candidates stay internal until verify
+* [DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md) — **discovery stages** (Serper/Tavily/Jina; Agent-Reach Stage C; Zernio optional/cost-paused; Firecrawl optional), FACT vs JUDGMENT on zero-config vs cookies, env keys; candidates stay internal until verify
 * [AGENTS.md](./AGENTS.md) — pipeline, confidence, local run
 * [ARCHITECTURE.md](./ARCHITECTURE.md) — funnel & UI hierarchy
 * [MIGRATION_TODO.md](./MIGRATION_TODO.md) — DoD / launch checklist (tied to open PRs)

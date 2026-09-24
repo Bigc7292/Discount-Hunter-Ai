@@ -36,7 +36,7 @@ Pricing / Stripe modal and ledger components ship on PR #1 / #2 branches (pendin
 
 ## 3. Search Pipeline (current intent)
 1. **Deploy**: Operative enters merchant + optional location.
-2. **Discover**: Multi-source **candidate** pool only (Serper / Jina / Zernio / Tavily; Firecrawl ready but not yet orchestrated) — see **[DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md)**. Candidates are **never** user-facing alone.
+2. **Discover**: Multi-source **candidate** pool only (Serper / Jina / Agent-Reach / Tavily; Zernio optional when keyed; Firecrawl ready but not yet orchestrated) — see **[DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md)**. Candidates are **never** user-facing alone.
 3. **Verify**: Backend checkout simulation (Puppeteer ± geo proxies).
 4. **Display**: **Verified-only** results — no unverified/social codes in UI. **CORE LAW**: never surface unverified codes.
 5. **Persist**: Inbox / history via Firestore when PR #1 merges; AgentMail for merchant OTP stub when PR #3 merges.
