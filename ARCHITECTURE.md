@@ -36,9 +36,9 @@ Pricing / Stripe modal and ledger components ship on PR #1 / #2 branches (pendin
 
 ## 3. Search Pipeline (current intent)
 1. **Deploy**: Operative enters merchant + optional location.
-2. **Discover**: NVIDIA NIM + backend discovery return **candidates** (not user-facing alone).
+2. **Discover**: Multi-source **candidate** pool only (Serper / Jina / Zernio / Tavily; Firecrawl ready but not yet orchestrated) — see **[DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md)**. Candidates are **never** user-facing alone.
 3. **Verify**: Backend checkout simulation (Puppeteer ± geo proxies).
-4. **Display**: **Verified-only** results (PR #4 pending merge) — no unverified/social codes in UI.
+4. **Display**: **Verified-only** results — no unverified/social codes in UI. **CORE LAW**: never surface unverified codes.
 5. **Persist**: Inbox / history via Firestore when PR #1 merges; AgentMail for merchant OTP stub when PR #3 merges.
 
 ## 4. UI/UX: Cyber-Tech Aesthetic
@@ -52,4 +52,4 @@ Defined in `src/index.css`:
 * **Auth / profile**: Firebase; lifetime entitlement fields arrive with PR #1 (pending merge).
 * **Shipping**: `gh` only — CloudAgent unavailable on plan.
 
-See [AGENTS.md](./AGENTS.md) for service diagram and env key names; [MIGRATION_TODO.md](./MIGRATION_TODO.md) for DoD checklist.
+See [DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md) for discovery stages & API keys; [AGENTS.md](./AGENTS.md) for service diagram; [MIGRATION_TODO.md](./MIGRATION_TODO.md) for DoD checklist.
