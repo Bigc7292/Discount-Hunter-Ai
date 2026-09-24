@@ -19,7 +19,7 @@ import Stripe from 'stripe';
 import admin from 'firebase-admin';
 import { verifyCodes } from './verifier.js';
 import { getAllSupportedRegions, getGeoLocation, isGeoProxyConfigured } from './geoProxy.js';
-import { cleanup } from './browserBot.js';
+import { cleanup, isBrowserlessConfigured } from './browserBot.js';
 import { discoverCodes } from './discovery.js';
 import { runVerificationTests } from './testRunner.js';
 import { createProfileAccount } from './profileManager.js';
@@ -218,6 +218,7 @@ app.get('/health', (_req, res) => {
     version: '2.0.0',
     stripe: !!stripe,
     firebaseAdmin: !!firestore,
+    browserlessConfigured: isBrowserlessConfigured(),
     geoProxyConfigured: isGeoProxyConfigured(),
     envProxyOverride: envProxy,
   });
@@ -462,8 +463,14 @@ app.listen(PORT, () => {
   console.log(`   Ledger:  http://localhost:${PORT}/ledger`);
   console.log(`   Headless: ${process.env.USE_HEADLESS_BROWSER !== 'false'}`);
   console.log(`   RateLim: verify=${process.env.RATE_LIMIT_VERIFY_PER_MIN || '10'}/min discover=${process.env.RATE_LIMIT_DISCOVER_PER_MIN || '20'}/min`);
+  const browserlessOn = isBrowserlessConfigured();
   const geoOn = isGeoProxyConfigured();
   const envProxy = !!(process.env.PROXY_SERVER || process.env.RESIDENTIAL_PROXY_URL);
+  console.log(`   Browserless: ${browserlessOn ? 'CONFIGURED (hosted Chrome primary)' : 'NOT SET (local Chromium fallback)'}`);
+  if (browserlessOn) {
+    const ws = process.env.BROWSERLESS_WS_ENDPOINT?.trim() || 'wss://production-sfo.browserless.io';
+    console.log(`   BrowserlessWS: ${ws}`);
+  }
   console.log(`   GeoProxy: ${geoOn ? 'CONFIGURED (residential key set)' : 'NOT SET (geo-testing disabled)'}`);
   if (geoOn) {
     console.log(`   GeoHost: ${process.env.RESIDENTIAL_PROXY_HOST || 'brd.superproxy.io'}:${process.env.RESIDENTIAL_PROXY_PORT || '22225'} zone=${process.env.RESIDENTIAL_PROXY_ZONE || 'residential'} customer=${process.env.RESIDENTIAL_PROXY_CUSTOMER ? 'SET' : 'unset (legacy username)'}`);

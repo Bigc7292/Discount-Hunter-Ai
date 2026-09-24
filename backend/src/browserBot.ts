@@ -1,6 +1,11 @@
 /**
  * BrowserBot — Puppeteer headless checkout simulator
  *
+ * Browser stack (owner locked):
+ *   1. Browserless.io hosted Chrome via puppeteer.connect when BROWSERLESS_TOKEN set
+ *   2. Bright Data geo rotating residential via geoProxy ProxyConfig (per testRegion)
+ *   3. Local Chromium + stealth = fallback only when Browserless token unset
+ *
  * Human-shopper verification path (HARD LAW: never complete paid purchase):
  *   1. bootstrapCart(merchant) — add a cheap/in-stock item
  *   2. navigateTowardCheckout — guest checkout when possible
@@ -43,9 +48,86 @@ interface EffectiveProxy {
   source: 'env' | 'geo' | 'none';
 }
 
+/** Browserless API token — BROWSERLESS_TOKEN preferred; BROWSERLESS_API_TOKEN accepted. */
+export function getBrowserlessToken(): string | undefined {
+  const t =
+    process.env.BROWSERLESS_TOKEN?.trim() ||
+    process.env.BROWSERLESS_API_TOKEN?.trim();
+  return t || undefined;
+}
+
+/** True when hosted Chrome via Browserless is configured (primary path). */
+export function isBrowserlessConfigured(): boolean {
+  return !!getBrowserlessToken();
+}
+
+/**
+ * Default Browserless Chrome WS host (BaaS v2, documented 2026).
+ * Override with BROWSERLESS_WS_ENDPOINT (base wss URL, no token).
+ * @see https://docs.browserless.io/examples/puppeteer-connection
+ */
+const DEFAULT_BROWSERLESS_WS = 'wss://production-sfo.browserless.io';
+
+/**
+ * Build puppeteer.connect browserWSEndpoint.
+ * Bright Data / geo: prefer externalProxyServer (credentials in URL).
+ * Fallback: launch.args --proxy-server=host:port (page.authenticate still used).
+ */
+function buildBrowserlessWsEndpoint(effective: EffectiveProxy): string {
+  const token = getBrowserlessToken();
+  if (!token) {
+    throw new Error('BROWSERLESS_TOKEN is not set');
+  }
+
+  const rawBase = (
+    process.env.BROWSERLESS_WS_ENDPOINT?.trim() || DEFAULT_BROWSERLESS_WS
+  ).replace(/\/$/, '');
+
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(rawBase);
+  } catch {
+    throw new Error(
+      `Invalid BROWSERLESS_WS_ENDPOINT: ${rawBase} (expected wss://host[/path])`
+    );
+  }
+
+  baseUrl.searchParams.set('token', token);
+
+  if (effective.source !== 'none' && effective.server) {
+    if (effective.username && effective.password) {
+      // Recommended Browserless third-party proxy param (HTTP(S) with auth).
+      // Format: http://user:pass@host:port — URLSearchParams encodes the value once.
+      // Do NOT pre-encode user/pass or searchParams will double-encode (% → %25).
+      const hostPort = effective.server.replace(/^https?:\/\//i, '');
+      const proxyWithAuth = `http://${effective.username}:${effective.password}@${hostPort}`;
+      baseUrl.searchParams.set('externalProxyServer', proxyWithAuth);
+      console.log(
+        `[BrowserBot] Browserless + ${effective.source} proxy via externalProxyServer: ${effective.server}` +
+          ` (auth user set, session/country in username)`
+      );
+    } else {
+      // No credentials — Chrome --proxy-server via launch JSON
+      const launch = {
+        args: [`--proxy-server=${effective.server}`],
+      };
+      baseUrl.searchParams.set('launch', JSON.stringify(launch));
+      console.log(
+        `[BrowserBot] Browserless + ${effective.source} proxy via launch --proxy-server=${effective.server}`
+      );
+    }
+  } else {
+    console.log('[BrowserBot] Browserless connect (no geo/env proxy — datacenter exit IP)');
+  }
+
+  return baseUrl.toString();
+}
+
 // Singleton browser — relaunched when effective proxy endpoint/credentials change
 let browserInstance: Browser | null = null;
 let activeProxyKey = 'none';
+/** How the singleton was obtained — connect (remote) vs launch (local). */
+let browserBackend: 'browserless' | 'local' | 'none' = 'none';
 
 /** Parse PROXY_SERVER / RESIDENTIAL_PROXY_URL into Chromium server + optional auth. */
 function parseProxyServerUrl(raw: string): {
@@ -98,30 +180,61 @@ function resolveEffectiveProxy(geoProxy?: ProxyConfig): EffectiveProxy {
 
 async function closeBrowserSingleton(): Promise<void> {
   if (browserInstance) {
+    // Works for both puppeteer.launch and puppeteer.connect (Browserless)
     await browserInstance.close().catch(() => {});
     browserInstance = null;
   }
   activeProxyKey = 'none';
+  browserBackend = 'none';
 }
 
 /**
- * Launch (or reuse) Chromium. When geo.proxy / env proxy changes (country or
- * rotating session), close the singleton so the new --proxy-server takes effect.
+ * Get a browser for a verify session.
+ *
+ * Priority:
+ *   1. Browserless.io hosted Chrome via puppeteer.connect when BROWSERLESS_TOKEN set
+ *      — Bright Data geo ProxyConfig attached via externalProxyServer (or --proxy-server)
+ *   2. Local Chromium launch + stealth (PR #25 path) when Browserless unset
+ *
+ * When geo.proxy / env proxy changes (country or rotating session), close the
+ * singleton so the new proxy key takes effect (same invariant as PR #25).
  */
 async function getBrowser(geoProxy?: ProxyConfig): Promise<Browser> {
   const effective = resolveEffectiveProxy(geoProxy);
+  const useBrowserless = isBrowserlessConfigured();
+  const sessionKey = `${useBrowserless ? 'browserless' : 'local'}|${effective.key}`;
 
-  if (browserInstance && browserInstance.connected && activeProxyKey === effective.key) {
+  if (browserInstance && browserInstance.connected && activeProxyKey === sessionKey) {
     return browserInstance;
   }
 
   if (browserInstance) {
     console.log(
-      `[BrowserBot] Proxy endpoint/credentials changed (${activeProxyKey} → ${effective.key}) — relaunching Chromium`
+      `[BrowserBot] Proxy/backend changed (${activeProxyKey} → ${sessionKey}) — ` +
+        `${useBrowserless ? 'reconnecting Browserless' : 'relaunching Chromium'}`
     );
     await closeBrowserSingleton();
   }
 
+  if (useBrowserless) {
+    const browserWSEndpoint = buildBrowserlessWsEndpoint(effective);
+    try {
+      // puppeteer-extra connect — remote Chrome; stealth hooks still apply to pages
+      browserInstance = await puppeteer.connect({ browserWSEndpoint });
+      activeProxyKey = sessionKey;
+      browserBackend = 'browserless';
+      console.log('[BrowserBot] Connected to Browserless hosted Chrome');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Failed to connect to Browserless (check BROWSERLESS_TOKEN / BROWSERLESS_WS_ENDPOINT` +
+          ` and paid plan if using externalProxyServer): ${msg}`
+      );
+    }
+    return browserInstance;
+  }
+
+  // ── Local Chromium fallback (PR #25 path) ───────────────────────────────
   // Prefer explicit env paths; otherwise let Puppeteer use its bundled Chrome.
   // NEVER default to a Windows Chrome path (breaks Linux/Render).
   const executablePath =
@@ -156,7 +269,8 @@ async function getBrowser(geoProxy?: ProxyConfig): Promise<Browser> {
       args: launchArgs,
       ignoreDefaultArgs: ['--enable-automation'],
     });
-    activeProxyKey = effective.key;
+    activeProxyKey = sessionKey;
+    browserBackend = 'local';
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
@@ -1359,8 +1473,12 @@ export async function simulateCheckoutBatch(
 
 export async function cleanup(): Promise<void> {
   if (browserInstance) {
+    const was = browserBackend;
     await closeBrowserSingleton();
-    console.log('[BrowserBot] Browser instance closed.');
+    console.log(
+      `[BrowserBot] Browser instance closed` +
+        (was === 'browserless' ? ' (Browserless disconnect).' : '.')
+    );
   }
 }
 
