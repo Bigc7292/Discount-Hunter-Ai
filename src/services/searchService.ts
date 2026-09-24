@@ -14,11 +14,21 @@ import { CouponCode, SearchResult, SearchStatus, LogEntry } from '../types';
 import { findInfluencerCodes, checkGlitchProbability, generateLogMessage } from './nvidiaService';
 import { checkVerifierHealth, discoverCodes } from './apiService';
 
-// Maximum candidates to send to verifier (prevents overloading Puppeteer)
-const MAX_CODES_TO_VERIFY = 5; // Match backend verifier cap
+// Per-code + batch budgets — MUST stay aligned with backend/src/verifier.ts
+// Owner hard rule: checkout-test EVERY discovery candidate (no MAX_CODES_TO_VERIFY cap).
+const PER_CODE_VERIFY_MS = 55_000;
+const VERIFY_BOOTSTRAP_BUFFER_MS = 120_000;
+/** Hard ceiling (~20 min) + client slack; Render free may kill sooner — see AGENTS.md */
+const VERIFY_BATCH_MAX_MS = 1_200_000;
 
-// Verifier timeout: if backend takes longer than this, abort (ms)
-const VERIFIER_TIMEOUT_MS = 360_000; // cart bootstrap + checkout-stage promo (~5 × 60s + buffer)
+/** Frontend abort aligned with backend batchTimeoutFor(N). */
+function verifierTimeoutFor(codeCount: number): number {
+  const n = Math.max(1, codeCount);
+  return Math.min(
+    VERIFY_BATCH_MAX_MS + 60_000,
+    VERIFY_BOOTSTRAP_BUFFER_MS + n * PER_CODE_VERIFY_MS
+  );
+}
 
 const VERIFIER_URL = import.meta.env.VITE_VERIFIER_API_URL ||
   (import.meta.env.PROD
@@ -100,8 +110,9 @@ async function runVerification(
   codes: { code: string; description: string; source?: string; sourceUrl?: string }[],
   region: string
 ): Promise<VerificationResponse> {
+  const timeoutMs = verifierTimeoutFor(codes.length);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), VERIFIER_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(`${VERIFIER_URL}/verify`, {
@@ -237,11 +248,11 @@ export async function runSearch(
       const score = (c: typeof a) => (/[0-9]/.test(c.code) ? 2 : 0) + (c.discoveryConfidence || 0);
       return score(b) - score(a);
     });
-    const toVerify = ranked.slice(0, MAX_CODES_TO_VERIFY);
-    const cappedCount = Math.max(0, discovered.length - toVerify.length);
+    // Owner hard rule: checkout-test EVERY discovery candidate (no hard cap).
+    const toVerify = ranked;
+    const budgetSec = Math.round(verifierTimeoutFor(toVerify.length) / 1000);
     addLog(
-      `VERIFY QUEUE: ${discovered.length} discovered → ${toVerify.length} sent (cap ${MAX_CODES_TO_VERIFY})` +
-        (cappedCount > 0 ? ` — ${cappedCount} capped` : ''),
+      `VERIFY QUEUE: ${discovered.length} discovered → ALL ${toVerify.length} sent for checkout test (budget ~${budgetSec}s, max ~20 min)`,
       'info'
     );
     addLog(`LAUNCHING HEADLESS BROWSER — TESTING ${toVerify.length} CODE${toVerify.length !== 1 ? 'S' : ''} AT REAL CHECKOUT...`, 'system');
@@ -346,6 +357,7 @@ export async function runSearch(
 
     // Unverified / untested candidates are NEVER mapped into UI payloads (verify-only invariant).
     // Counts only — no code strings returned for display.
+    // With verify-all, untested only occurs if the batch budget/circuit stopped early.
     const untestedCount = Math.max(0, discovered.length - toVerify.length);
 
     const failedCount = allResults.filter(r =>
@@ -365,7 +377,7 @@ export async function runSearch(
     }
 
     if (untestedCount > 0) {
-      addLog(`${untestedCount} DISCOVERED CODE${untestedCount !== 1 ? 'S' : ''} NOT TESTED (CAPPED)`, 'info');
+      addLog(`${untestedCount} DISCOVERED CODE${untestedCount !== 1 ? 'S' : ''} NOT REACHED (batch budget / circuit)`, 'info');
     }
 
     // Estimated savings from actual discount amounts detected

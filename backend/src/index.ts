@@ -166,7 +166,7 @@ const verifyRequestSchema = z.object({
     description: z.string(),
     source: z.string().optional(),
     sourceUrl: z.string().optional(),
-  })).min(1).max(10), // Cap at 10 — prevents Puppeteer overload
+  })).min(1).max(50), // Sanity ceiling (abuse guard) — NOT a product verify-cap; all discovery codes must be tested
   testRegion: z.string().default('US'),
 });
 

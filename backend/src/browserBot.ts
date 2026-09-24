@@ -12,9 +12,22 @@
  *   cart_bootstrap_failed | no_promo_field | code_rejected | timeout | bot_blocked
  */
 
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import type { BrowserTestResult, ProxyConfig } from './types.js';
+
+// puppeteer-extra + stealth (Puppeteer 24: disable fragile evasions that break newer Chrome)
+const stealth = StealthPlugin();
+try {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const evasions: Set<string> | undefined = (stealth as any).enabledEvasions;
+  evasions?.delete('iframe.contentWindow');
+  evasions?.delete('media.codecs');
+} catch {
+  /* ignore */
+}
+puppeteer.use(stealth);
 
 // Singleton browser instance — reused across verifications
 let browserInstance: Browser | null = null;
@@ -28,20 +41,34 @@ async function getBrowser(): Promise<Browser> {
       process.env.CHROME_PATH ||
       undefined;
 
+    const launchArgs = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
+      '--window-size=1366,768',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-infobars',
+      '--lang=en-US,en',
+    ];
+
+    // Optional residential / datacenter proxy (owner-supplied — never commit secrets).
+    // PROXY_SERVER or RESIDENTIAL_PROXY_URL → Chromium --proxy-server=
+    // Supports http://host:port, http://user:pass@host:port, socks5://host:port
+    const envProxy = process.env.PROXY_SERVER || process.env.RESIDENTIAL_PROXY_URL;
+    if (envProxy) {
+      const parsed = parseProxyServerUrl(envProxy);
+      launchArgs.push(`--proxy-server=${parsed.server}`);
+      console.log(`[BrowserBot] Using env proxy: ${parsed.server}`);
+    }
+
     try {
       browserInstance = await puppeteer.launch({
         ...(executablePath ? { executablePath } : {}),
         headless: process.env.USE_HEADLESS_BROWSER !== 'false',
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--disable-gpu',
-          '--window-size=1366,768',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-infobars',
-        ],
+        args: launchArgs,
+        ignoreDefaultArgs: ['--enable-automation'],
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -53,6 +80,27 @@ async function getBrowser(): Promise<Browser> {
   }
   return browserInstance;
 }
+
+/** Parse PROXY_SERVER / RESIDENTIAL_PROXY_URL into Chromium server + optional auth. */
+function parseProxyServerUrl(raw: string): {
+  server: string;
+  username?: string;
+  password?: string;
+} {
+  try {
+    const u = new URL(raw);
+    const protocol = u.protocol || 'http:';
+    const server = `${protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`;
+    return {
+      server,
+      username: u.username ? decodeURIComponent(u.username) : undefined,
+      password: u.password ? decodeURIComponent(u.password) : undefined,
+    };
+  } catch {
+    return { server: raw };
+  }
+}
+
 
 async function wait(min: number, max?: number): Promise<void> {
   const ms = max ? Math.floor(Math.random() * (max - min + 1)) + min : min;
@@ -94,30 +142,131 @@ function originOf(merchantUrl: string): string {
 // ---------------------------------------------------------------------------
 
 async function preparePage(page: Page, proxy?: ProxyConfig): Promise<void> {
-  await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-  );
+  const ua =
+    process.env.BROWSER_USER_AGENT ||
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+  await page.setUserAgent(ua);
   await page.setExtraHTTPHeaders({
     'Accept-Language': 'en-US,en;q=0.9',
     Accept:
-      'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Accept-Encoding': 'gzip, deflate, br',
+    'Upgrade-Insecure-Requests': '1',
+    'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
     DNT: '1',
   });
 
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  await page.setViewport({
+    width: 1366,
+    height: 768,
+    deviceScaleFactor: 1,
+    hasTouch: false,
+    isLandscape: true,
   });
 
-  await page.setViewport({ width: 1366, height: 768 });
+  const tz = process.env.BROWSER_TIMEZONE || 'America/New_York';
+  try {
+    await page.emulateTimezone(tz);
+  } catch {
+    /* optional */
+  }
 
-  if (proxy?.username && proxy?.password) {
+  // CDP / evaluate overrides — belt-and-suspenders with puppeteer-extra-plugin-stealth
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [1, 2, 3, 4, 5],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).chrome = { runtime: {} };
+    const originalQuery = window.navigator.permissions?.query?.bind(
+      window.navigator.permissions
+    );
+    if (originalQuery) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window.navigator.permissions as any).query = (parameters: any) =>
+        parameters?.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission } as PermissionStatus)
+          : originalQuery(parameters);
+    }
+  });
+
+  try {
+    const client = await page.createCDPSession();
+    await client.send('Network.setUserAgentOverride', {
+      userAgent: ua,
+      acceptLanguage: 'en-US,en;q=0.9',
+      platform: 'Win32',
+    });
+    await client.send('Emulation.setLocaleOverride', { locale: 'en-US' }).catch(() => {});
+  } catch {
+    /* CDP optional */
+  }
+
+  // Proxy auth: env PROXY_SERVER / RESIDENTIAL_PROXY_URL first, else ProxyConfig
+  const envProxy = process.env.PROXY_SERVER || process.env.RESIDENTIAL_PROXY_URL;
+  if (envProxy) {
+    const parsed = parseProxyServerUrl(envProxy);
+    if (parsed.username && parsed.password) {
+      await page.authenticate({
+        username: parsed.username,
+        password: parsed.password,
+      });
+    }
+  } else if (proxy?.username && proxy?.password) {
     await page.authenticate({
       username: proxy.username,
       password: proxy.password,
     });
   }
 }
+
+/** Human-like mouse wander — light anti-bot signal. */
+async function humanMouseJitter(page: Page): Promise<void> {
+  try {
+    const vp = page.viewport() || { width: 1366, height: 768 };
+    const x = Math.floor(80 + Math.random() * (vp.width - 160));
+    const y = Math.floor(80 + Math.random() * (vp.height - 160));
+    await page.mouse.move(x, y, { steps: 5 + Math.floor(Math.random() * 12) });
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Warm-up: land on homepage / PLP briefly before cart bootstrap (human path).
+ * Non-fatal — bootstrap still runs if warm-up fails.
+ */
+async function warmUpSession(
+  page: Page,
+  merchantUrl: string,
+  navTimeout: number
+): Promise<void> {
+  const origin = originOf(merchantUrl);
+  console.log('  → warm-up: homepage/PLP briefly (human path)');
+  try {
+    await page.goto(`${origin}/`, {
+      waitUntil: 'domcontentloaded',
+      timeout: navTimeout,
+    });
+    await wait(1400, 2800);
+    await humanMouseJitter(page);
+    await page.evaluate(() => {
+      window.scrollBy(0, 180 + Math.floor(Math.random() * 420));
+    });
+    await wait(700, 1500);
+  } catch (err) {
+    console.warn(
+      '  → warm-up skipped:',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
 
 async function detectBotBlock(page: Page): Promise<string | null> {
   return page.evaluate(() => {
@@ -954,7 +1103,8 @@ export async function simulateCheckout(
     page = await browser.newPage();
     await preparePage(page, proxy);
 
-    await bootstrapCart(page, merchantUrl, navTimeout);
+    await warmUpSession(page, merchantUrl, navTimeout);
+      await bootstrapCart(page, merchantUrl, navTimeout);
     await navigateTowardCheckout(page, merchantUrl, navTimeout);
 
     const blocked = await detectBotBlock(page);
@@ -966,6 +1116,8 @@ export async function simulateCheckout(
       };
     }
 
+    await humanMouseJitter(page);
+    await wait(400, 900);
     const result = await applyCodeOnPage(page, promoCode);
     await abandonCart(page, merchantUrl);
 
@@ -1031,6 +1183,7 @@ export async function simulateCheckoutBatch(
   let page: Page | null = null;
   const navTimeout = Math.min(timeoutMsPerCode, 45000);
   const sessionStart = Date.now();
+  let botBlockSoftRetries = 0;
 
   try {
     const browser = await getBrowser();
@@ -1038,6 +1191,7 @@ export async function simulateCheckoutBatch(
     await preparePage(page, proxy);
 
     try {
+      await warmUpSession(page, merchantUrl, navTimeout);
       await bootstrapCart(page, merchantUrl, navTimeout);
       await navigateTowardCheckout(page, merchantUrl, navTimeout);
     } catch (err) {
@@ -1064,14 +1218,49 @@ export async function simulateCheckoutBatch(
     for (let i = 0; i < promoCodes.length; i++) {
       const codeStart = Date.now();
       try {
-        const result = await applyCodeOnPage(page, promoCodes[i]);
+        await humanMouseJitter(page);
+        await wait(400, 1100);
+        let result = await applyCodeOnPage(page, promoCodes[i]);
+
+        // Soft circuit: on bot_blocked, pause once with longer delay and retry same code
+        if (
+          result.errorMessage?.includes('bot_blocked') &&
+          botBlockSoftRetries < 1
+        ) {
+          botBlockSoftRetries++;
+          console.warn('  → bot_blocked mid-batch — soft pause + one retry');
+          await wait(10_000, 18_000);
+          await humanMouseJitter(page);
+          result = await applyCodeOnPage(page, promoCodes[i]);
+        }
+
         results.push({
           ...result,
           pageLoadTime: Date.now() - codeStart,
         });
+
+        // Still blocked after soft retry → abort remaining (don't burn queue)
+        if (
+          result.errorMessage?.includes('bot_blocked') &&
+          botBlockSoftRetries >= 1
+        ) {
+          console.warn('  → bot_blocked persists — aborting remaining codes');
+          for (let j = i + 1; j < promoCodes.length; j++) {
+            results.push({
+              success: false,
+              errorMessage: categorized(
+                'bot_blocked',
+                'Aborted — store bot-block after soft retry'
+              ),
+              pageLoadTime: 0,
+            });
+          }
+          break;
+        }
+
         await clearPromoField(page);
         if (i < promoCodes.length - 1) {
-          await wait(500, 1200);
+          await wait(800, 2000); // jittered gap between codes (human-like)
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

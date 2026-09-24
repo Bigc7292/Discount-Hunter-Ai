@@ -205,12 +205,17 @@ npm install && npm run dev
   5. `abandonCart` — **NEVER** type/submit card details, **NEVER** place order
 - Empty-cart / missing promo used to hide the field when we jumped straight to `/cart`. Cart bootstrap is now required before promo apply.
 - Categorized `errorMessage` prefixes: `cart_bootstrap_failed` | `no_promo_field` | `code_rejected` | `timeout` | `bot_blocked`
-- Batch uses one cart session when possible (`simulateCheckoutBatch`); per-code timeout ~60s; batch budget ~5 min; frontend verifier abort ~6 min.
+- **Verify ALL discovery candidates** — no frontend `MAX_CODES_TO_VERIFY` / backend `codes.slice(0, 5)` product cap. UI still shows **verified only**.
+- Batch uses **ONE** browser + **ONE** cart session (`simulateCheckoutBatch`); never spam parallel Chromiums on Render free.
+- Timeouts scale with N: per-code ~55s; batch = bootstrap buffer + N × per-code, **hard max ~20 min**; frontend abort aligned. If Render free kills the HTTP request sooner, progressive/partial results already collected are returned when the batch deadline fires — prefer a paid Node host for large N.
+- Anti-bot: `puppeteer-extra` + stealth plugin (fragile evasions disabled) + CDP overrides; realistic UA/viewport/locale/timezone; jittered human delays + optional mouse moves; homepage/PLP **warm-up** before cart bootstrap.
+- Circuit breaker: on `bot_blocked`, soft-pause once (~10–18s) and retry; if still blocked, abort remaining codes (don't burn the queue).
+- Optional proxy env (owner supplies; never commit secrets): `PROXY_SERVER` or `RESIDENTIAL_PROXY_URL` → Chromium `--proxy-server` (http/socks). See `backend/.env.example`.
 - Chromium: `PUPPETEER_EXECUTABLE_PATH` / `CHROME_PATH` or Puppeteer bundled — **never** Windows Chrome default (Render/Linux).
 - **AgentMail** inbox `discount-hunter@agentmail.to` is for **future OTP only** until `AGENTMAIL_API_KEY` is set on Render **and** `fetchLatestOtp` is implemented. Do not expect AgentMail to fix cart bootstrap, Nike bot-blocks, or page-load timeouts.
 
 ## Notes
 
-- Real verification benefits from residential proxies for geo-targeting (Nike often bot-blocks datacenter IPs on Render free tier)
+- Real verification benefits from **residential** proxies for geo-targeting (Nike often bot-blocks datacenter IPs on Render free tier). Set `PROXY_SERVER` / `RESIDENTIAL_PROXY_URL` on the host — do not invent or commit credentials.
 - Without proxies, verification still runs but without geo-specific results and higher bot-block risk
 - See [MIGRATION_TODO.md](./MIGRATION_TODO.md) for DoD gates before launch
