@@ -12,12 +12,15 @@
  *   cart_bootstrap_failed | no_promo_field | code_rejected | timeout | bot_blocked
  */
 
-import puppeteer from 'puppeteer-extra';
+import vanillaPuppeteer from 'puppeteer';
+import { addExtra } from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import type { BrowserTestResult, ProxyConfig } from './types.js';
 
-// puppeteer-extra + stealth (Puppeteer 24: disable fragile evasions that break newer Chrome)
+// puppeteer-extra + stealth under NodeNext ESM (tsc: use addExtra, not default import)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const puppeteer = addExtra(vanillaPuppeteer as any);
 const stealth = StealthPlugin();
 try {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -29,57 +32,20 @@ try {
 }
 puppeteer.use(stealth);
 
-// Singleton browser instance — reused across verifications
-let browserInstance: Browser | null = null;
-
-async function getBrowser(): Promise<Browser> {
-  if (!browserInstance || !browserInstance.connected) {
-    // Prefer explicit env paths; otherwise let Puppeteer use its bundled Chrome.
-    // NEVER default to a Windows Chrome path (breaks Linux/Render).
-    const executablePath =
-      process.env.PUPPETEER_EXECUTABLE_PATH ||
-      process.env.CHROME_PATH ||
-      undefined;
-
-    const launchArgs = [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--disable-gpu',
-      '--window-size=1366,768',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-infobars',
-      '--lang=en-US,en',
-    ];
-
-    // Optional residential / datacenter proxy (owner-supplied — never commit secrets).
-    // PROXY_SERVER or RESIDENTIAL_PROXY_URL → Chromium --proxy-server=
-    // Supports http://host:port, http://user:pass@host:port, socks5://host:port
-    const envProxy = process.env.PROXY_SERVER || process.env.RESIDENTIAL_PROXY_URL;
-    if (envProxy) {
-      const parsed = parseProxyServerUrl(envProxy);
-      launchArgs.push(`--proxy-server=${parsed.server}`);
-      console.log(`[BrowserBot] Using env proxy: ${parsed.server}`);
-    }
-
-    try {
-      browserInstance = await puppeteer.launch({
-        ...(executablePath ? { executablePath } : {}),
-        headless: process.env.USE_HEADLESS_BROWSER !== 'false',
-        args: launchArgs,
-        ignoreDefaultArgs: ['--enable-automation'],
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `Failed to launch Chrome/Puppeteer` +
-          ` (set PUPPETEER_EXECUTABLE_PATH or CHROME_PATH if needed): ${msg}`
-      );
-    }
-  }
-  return browserInstance;
+/** Resolved Chromium proxy endpoint + optional page.authenticate credentials. */
+interface EffectiveProxy {
+  /** Chromium --proxy-server value, e.g. http://host:22225 */
+  server: string;
+  username?: string;
+  password?: string;
+  /** Fingerprint for singleton relaunch when US→UK / session rotates */
+  key: string;
+  source: 'env' | 'geo' | 'none';
 }
+
+// Singleton browser — relaunched when effective proxy endpoint/credentials change
+let browserInstance: Browser | null = null;
+let activeProxyKey = 'none';
 
 /** Parse PROXY_SERVER / RESIDENTIAL_PROXY_URL into Chromium server + optional auth. */
 function parseProxyServerUrl(raw: string): {
@@ -99,6 +65,106 @@ function parseProxyServerUrl(raw: string): {
   } catch {
     return { server: raw };
   }
+}
+
+/**
+ * Env PROXY_SERVER / RESIDENTIAL_PROXY_URL is a global override.
+ * Else geo ProxyConfig (Bright Data residential) supplies host:port + auth.
+ */
+function resolveEffectiveProxy(geoProxy?: ProxyConfig): EffectiveProxy {
+  const envProxy = process.env.PROXY_SERVER || process.env.RESIDENTIAL_PROXY_URL;
+  if (envProxy) {
+    const parsed = parseProxyServerUrl(envProxy);
+    return {
+      server: parsed.server,
+      username: parsed.username,
+      password: parsed.password,
+      key: `env|${parsed.server}|${parsed.username || ''}|${parsed.password ? '***' : ''}`,
+      source: 'env',
+    };
+  }
+  if (geoProxy?.host && geoProxy.port) {
+    const server = `http://${geoProxy.host}:${geoProxy.port}`;
+    return {
+      server,
+      username: geoProxy.username,
+      password: geoProxy.password,
+      key: `geo|${server}|${geoProxy.username || ''}|${geoProxy.password ? '***' : ''}`,
+      source: 'geo',
+    };
+  }
+  return { server: '', key: 'none', source: 'none' };
+}
+
+async function closeBrowserSingleton(): Promise<void> {
+  if (browserInstance) {
+    await browserInstance.close().catch(() => {});
+    browserInstance = null;
+  }
+  activeProxyKey = 'none';
+}
+
+/**
+ * Launch (or reuse) Chromium. When geo.proxy / env proxy changes (country or
+ * rotating session), close the singleton so the new --proxy-server takes effect.
+ */
+async function getBrowser(geoProxy?: ProxyConfig): Promise<Browser> {
+  const effective = resolveEffectiveProxy(geoProxy);
+
+  if (browserInstance && browserInstance.connected && activeProxyKey === effective.key) {
+    return browserInstance;
+  }
+
+  if (browserInstance) {
+    console.log(
+      `[BrowserBot] Proxy endpoint/credentials changed (${activeProxyKey} → ${effective.key}) — relaunching Chromium`
+    );
+    await closeBrowserSingleton();
+  }
+
+  // Prefer explicit env paths; otherwise let Puppeteer use its bundled Chrome.
+  // NEVER default to a Windows Chrome path (breaks Linux/Render).
+  const executablePath =
+    process.env.PUPPETEER_EXECUTABLE_PATH ||
+    process.env.CHROME_PATH ||
+    undefined;
+
+  const launchArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--disable-gpu',
+    '--window-size=1366,768',
+    '--disable-blink-features=AutomationControlled',
+    '--disable-infobars',
+    '--lang=en-US,en',
+  ];
+
+  if (effective.source !== 'none' && effective.server) {
+    launchArgs.push(`--proxy-server=${effective.server}`);
+    console.log(
+      `[BrowserBot] Using ${effective.source} proxy: ${effective.server}` +
+        (effective.username ? ` (auth user set, session/country in username)` : '')
+    );
+  }
+
+  try {
+    browserInstance = await puppeteer.launch({
+      ...(executablePath ? { executablePath } : {}),
+      headless: process.env.USE_HEADLESS_BROWSER !== 'false',
+      args: launchArgs,
+      ignoreDefaultArgs: ['--enable-automation'],
+    });
+    activeProxyKey = effective.key;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to launch Chrome/Puppeteer` +
+        ` (set PUPPETEER_EXECUTABLE_PATH or CHROME_PATH if needed): ${msg}`
+    );
+  }
+  return browserInstance;
 }
 
 
@@ -207,20 +273,12 @@ async function preparePage(page: Page, proxy?: ProxyConfig): Promise<void> {
     /* CDP optional */
   }
 
-  // Proxy auth: env PROXY_SERVER / RESIDENTIAL_PROXY_URL first, else ProxyConfig
-  const envProxy = process.env.PROXY_SERVER || process.env.RESIDENTIAL_PROXY_URL;
-  if (envProxy) {
-    const parsed = parseProxyServerUrl(envProxy);
-    if (parsed.username && parsed.password) {
-      await page.authenticate({
-        username: parsed.username,
-        password: parsed.password,
-      });
-    }
-  } else if (proxy?.username && proxy?.password) {
+  // Proxy auth matches Chromium --proxy-server from getBrowser(resolveEffectiveProxy)
+  const effective = resolveEffectiveProxy(proxy);
+  if (effective.username && effective.password) {
     await page.authenticate({
-      username: proxy.username,
-      password: proxy.password,
+      username: effective.username,
+      password: effective.password,
     });
   }
 }
@@ -1099,7 +1157,7 @@ export async function simulateCheckout(
   const navTimeout = Math.min(timeoutMs, 45000);
 
   try {
-    const browser = await getBrowser();
+    const browser = await getBrowser(proxy);
     page = await browser.newPage();
     await preparePage(page, proxy);
 
@@ -1186,7 +1244,7 @@ export async function simulateCheckoutBatch(
   let botBlockSoftRetries = 0;
 
   try {
-    const browser = await getBrowser();
+    const browser = await getBrowser(proxy);
     page = await browser.newPage();
     await preparePage(page, proxy);
 
@@ -1301,8 +1359,7 @@ export async function simulateCheckoutBatch(
 
 export async function cleanup(): Promise<void> {
   if (browserInstance) {
-    await browserInstance.close().catch(() => {});
-    browserInstance = null;
+    await closeBrowserSingleton();
     console.log('[BrowserBot] Browser instance closed.');
   }
 }

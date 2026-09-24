@@ -18,7 +18,7 @@ import path from 'path';
 import Stripe from 'stripe';
 import admin from 'firebase-admin';
 import { verifyCodes } from './verifier.js';
-import { getAllSupportedRegions, getGeoLocation } from './geoProxy.js';
+import { getAllSupportedRegions, getGeoLocation, isGeoProxyConfigured } from './geoProxy.js';
 import { cleanup } from './browserBot.js';
 import { discoverCodes } from './discovery.js';
 import { runVerificationTests } from './testRunner.js';
@@ -210,6 +210,7 @@ async function verifyFirebaseIdToken(authHeader: string | undefined): Promise<st
 
 // Health check (single definition)
 app.get('/health', (_req, res) => {
+  const envProxy = !!(process.env.PROXY_SERVER || process.env.RESIDENTIAL_PROXY_URL);
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
@@ -217,6 +218,8 @@ app.get('/health', (_req, res) => {
     version: '2.0.0',
     stripe: !!stripe,
     firebaseAdmin: !!firestore,
+    geoProxyConfigured: isGeoProxyConfigured(),
+    envProxyOverride: envProxy,
   });
 });
 
@@ -459,6 +462,12 @@ app.listen(PORT, () => {
   console.log(`   Ledger:  http://localhost:${PORT}/ledger`);
   console.log(`   Headless: ${process.env.USE_HEADLESS_BROWSER !== 'false'}`);
   console.log(`   RateLim: verify=${process.env.RATE_LIMIT_VERIFY_PER_MIN || '10'}/min discover=${process.env.RATE_LIMIT_DISCOVER_PER_MIN || '20'}/min`);
-  console.log(`   Proxy:   ${process.env.RESIDENTIAL_PROXY_API_KEY ? 'CONFIGURED' : 'NOT SET (geo-testing disabled)'}`);
+  const geoOn = isGeoProxyConfigured();
+  const envProxy = !!(process.env.PROXY_SERVER || process.env.RESIDENTIAL_PROXY_URL);
+  console.log(`   GeoProxy: ${geoOn ? 'CONFIGURED (residential key set)' : 'NOT SET (geo-testing disabled)'}`);
+  if (geoOn) {
+    console.log(`   GeoHost: ${process.env.RESIDENTIAL_PROXY_HOST || 'brd.superproxy.io'}:${process.env.RESIDENTIAL_PROXY_PORT || '22225'} zone=${process.env.RESIDENTIAL_PROXY_ZONE || 'residential'} customer=${process.env.RESIDENTIAL_PROXY_CUSTOMER ? 'SET' : 'unset (legacy username)'}`);
+  }
+  console.log(`   EnvProxy: ${envProxy ? 'SET (global Chromium override)' : 'not set'}`);
   console.log('');
 });
