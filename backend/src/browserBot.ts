@@ -20,22 +20,35 @@ let browserInstance: Browser | null = null;
 
 async function getBrowser(): Promise<Browser> {
   if (!browserInstance || !browserInstance.connected) {
-    const executablePath = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    // Prefer explicit env paths; otherwise let Puppeteer use its bundled Chrome.
+    // NEVER default to a Windows Chrome path (breaks Linux/Render).
+    const executablePath =
+      process.env.PUPPETEER_EXECUTABLE_PATH ||
+      process.env.CHROME_PATH ||
+      undefined;
 
-    browserInstance = await puppeteer.launch({
-      executablePath,
-      headless: process.env.USE_HEADLESS_BROWSER !== 'false',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
-        '--window-size=1366,768',
-        '--disable-blink-features=AutomationControlled', // Avoid bot detection
-        '--disable-infobars',
-      ],
-    });
+    try {
+      browserInstance = await puppeteer.launch({
+        ...(executablePath ? { executablePath } : {}),
+        headless: process.env.USE_HEADLESS_BROWSER !== 'false',
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--disable-gpu',
+          '--window-size=1366,768',
+          '--disable-blink-features=AutomationControlled', // Avoid bot detection
+          '--disable-infobars',
+        ],
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Failed to launch Chrome/Puppeteer` +
+          ` (set PUPPETEER_EXECUTABLE_PATH or CHROME_PATH if needed): ${msg}`
+      );
+    }
   }
   return browserInstance;
 }
@@ -107,7 +120,8 @@ export async function simulateCheckout(
     if (!promoInput) {
       return {
         success: false,
-        errorMessage: 'Could not locate promo code input field on this page',
+        errorMessage:
+          'Empty cart or no promo field on /cart — item may be required before code can be tested',
         pageLoadTime: Date.now() - startTime,
       };
     }
@@ -253,7 +267,11 @@ async function findPromoInput(page: Page) {
     'a[class*="promo" i]',
     'button[class*="promo" i]',
     'a[class*="coupon" i]',
+    'button[class*="coupon" i]',
     'span[class*="promo" i]',
+    'summary',
+    '[data-testid*="promo" i]',
+    '[data-testid*="coupon" i]',
   ];
 
   for (const trigger of expandTriggers) {
@@ -271,6 +289,44 @@ async function findPromoInput(page: Page) {
     } catch {
       continue;
     }
+  }
+
+  // Text-based expanders: "Have a promo code?", "Enter coupon", etc.
+  try {
+    const clicked = await page.evaluate(() => {
+      const phrases = [
+        'have a promo',
+        'have a coupon',
+        'promo code',
+        'enter a promo',
+        'enter promo',
+        'add promo',
+        'apply a code',
+        'discount code',
+        'got a code',
+        'use a coupon',
+      ];
+      const clickables = Array.from(
+        document.querySelectorAll('a, button, span, summary, div[role="button"]')
+      );
+      for (const el of clickables) {
+        const text = (el.textContent || '').toLowerCase().replace(/\s+/g, ' ').trim();
+        if (text.length > 0 && text.length < 80 && phrases.some(p => text.includes(p))) {
+          (el as HTMLElement).click();
+          return true;
+        }
+      }
+      return false;
+    });
+    if (clicked) {
+      await wait(800, 1200);
+      for (const selector of selectors) {
+        const input = await page.$(selector).catch(() => null);
+        if (input) return input;
+      }
+    }
+  } catch {
+    // ignore — fall through to null
   }
 
   return null;

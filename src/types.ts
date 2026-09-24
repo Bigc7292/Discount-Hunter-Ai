@@ -45,6 +45,8 @@ export interface SearchResult {
   unverifiedCount?: number;     // How many codes were discovered but FAILED verification
   competitors: Competitor[];
   verifierOnline: boolean;      // Was the backend verifier reachable during this search?
+  /** Short human reason when 0 codes verified (no code strings). e.g. "page load timeout" */
+  dominantFailureReason?: string;
   stats: {
     sourcesScanned: number;
     codesDiscovered: number;    // Total candidates from AI discovery

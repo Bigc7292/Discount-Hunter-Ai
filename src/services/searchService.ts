@@ -15,10 +15,10 @@ import { findInfluencerCodes, checkGlitchProbability, generateLogMessage } from 
 import { checkVerifierHealth, discoverCodes } from './apiService';
 
 // Maximum candidates to send to verifier (prevents overloading Puppeteer)
-const MAX_CODES_TO_VERIFY = 3; // Keep batch inside UI + Render request budgets
+const MAX_CODES_TO_VERIFY = 5; // Match backend verifier cap
 
 // Verifier timeout: if backend takes longer than this, abort (ms)
-const VERIFIER_TIMEOUT_MS = 150_000; // ~3 codes × ~45s + buffer
+const VERIFIER_TIMEOUT_MS = 240_000; // ~5 codes × ~45s + buffer
 
 const VERIFIER_URL = import.meta.env.VITE_VERIFIER_API_URL ||
   (import.meta.env.PROD
@@ -53,6 +53,41 @@ interface VerificationResponse {
   failed: number;
   unverified: number;
   processingTimeMs: number;
+}
+
+
+/** Bucket non-verified error messages into a short UI-safe label (no codes). */
+function dominantFailureReason(results: VerificationResult[]): string | undefined {
+  const failed = results.filter(r => r.status !== 'verified');
+  if (failed.length === 0) return undefined;
+
+  const bucket = (r: VerificationResult): string => {
+    const m = (r.errorMessage || '').toLowerCase();
+    if (/timeout|slow or blocking/.test(m)) return 'page load timeout';
+    if (/empty cart|no promo field|item may be required/.test(m)) return 'empty cart or no promo field';
+    if (/could not locate promo/.test(m)) return 'no promo field on cart';
+    if (/no discount|no promo/.test(m)) return 'no promo / discount signal';
+    if (/invalid|not valid|expired|rejected|not applicable/.test(m) || r.status === 'expired' || r.status === 'failed') {
+      return 'invalid or rejected at checkout';
+    }
+    if (r.status === 'error') return 'verifier error';
+    return 'checkout did not confirm';
+  };
+
+  const counts = new Map<string, number>();
+  for (const r of failed) {
+    const key = bucket(r);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  let best = '';
+  let bestN = 0;
+  for (const [k, n] of counts) {
+    if (n > bestN) {
+      best = k;
+      bestN = n;
+    }
+  }
+  return best || undefined;
 }
 
 async function runVerification(
@@ -199,6 +234,12 @@ export async function runSearch(
       return score(b) - score(a);
     });
     const toVerify = ranked.slice(0, MAX_CODES_TO_VERIFY);
+    const cappedCount = Math.max(0, discovered.length - toVerify.length);
+    addLog(
+      `VERIFY QUEUE: ${discovered.length} discovered → ${toVerify.length} sent (cap ${MAX_CODES_TO_VERIFY})` +
+        (cappedCount > 0 ? ` — ${cappedCount} capped` : ''),
+      'info'
+    );
     addLog(`LAUNCHING HEADLESS BROWSER — TESTING ${toVerify.length} CODE${toVerify.length !== 1 ? 'S' : ''} AT REAL CHECKOUT...`, 'system');
 
     const validateMsg = await generateLogMessage(discovery.merchantName, 'validating');
@@ -244,6 +285,7 @@ export async function runSearch(
         unverifiedCount: discovered.length,
         competitors: discovery.competitors,
         verifierOnline: true,
+        dominantFailureReason: timedOut ? 'page load timeout' : 'verifier error',
         stats: {
           sourcesScanned: discovered.length,
           codesDiscovered: discovered.length,
@@ -261,6 +303,19 @@ export async function runSearch(
     // Anything else is silently dropped. This is the core promise of the app.
 
     const allResults = verificationResponse.results || [];
+
+    // Owner diagnostics only — codes + failure why in logs; NEVER in UI cards
+    for (const r of allResults) {
+      if (r.status === 'verified') continue;
+      const err = (r.errorMessage || '').trim().slice(0, 100);
+      addLog(
+        `NOT VERIFIED [${r.code}]: status=${r.status}${err ? ` — ${err}` : ''}`,
+        'info'
+      );
+    }
+
+    const failureReason = dominantFailureReason(allResults);
+
     const verifiedCodes: CouponCode[] = allResults
       .filter(r => r.status === 'verified')
       .map(r => {
@@ -331,6 +386,7 @@ export async function runSearch(
       unverifiedCount: failedCount + unverifiedCount + untestedCount,
       competitors: discovery.competitors,
       verifierOnline: true,
+      dominantFailureReason: verifiedCodes.length === 0 ? failureReason : undefined,
       stats: {
         sourcesScanned: discovered.length,
         codesDiscovered: discovered.length,

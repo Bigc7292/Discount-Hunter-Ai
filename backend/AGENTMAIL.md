@@ -14,3 +14,5 @@ Bot mailbox path for merchant signup / OTP verification uses **AgentMail**, not 
 - Plus-addressing (`user+tag@…`) is **not** documented for AgentMail `@agentmail.to` inboxes. Profiles share this single inbox; OTP polling must filter by time and merchant/profile metadata (see `agentMailClient.ts` TODOs).
 
 Env (server-only): `AGENTMAIL_INBOX_EMAIL`, `AGENTMAIL_API_KEY`.
+
+**Scope today:** Verify uses Puppeteer cart apply only. This inbox does **not** fix empty-cart / page-load timeouts. OTP polling (`fetchLatestOtp`) remains stubbed until `AGENTMAIL_API_KEY` is configured on the host.

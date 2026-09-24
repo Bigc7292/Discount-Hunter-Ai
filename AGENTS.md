@@ -193,6 +193,12 @@ npm install && npm run dev
 - Backend: Node host (e.g. Railway) — verifier should run continuously
 - Ship changes with `gh` PRs; CloudAgent unavailable on current plan
 
+
+## Verify vs AgentMail (OTP)
+
+- **Verify** = Puppeteer cart/checkout apply (`browserBot` → `/cart`). Empty-cart timeouts mean no promo field until an item is in cart — not an email problem.
+- **AgentMail** inbox `discount-hunter@agentmail.to` is for **future OTP only** until `AGENTMAIL_API_KEY` is set on Render **and** `fetchLatestOtp` is implemented. Do not expect AgentMail to fix empty-cart or page-load timeouts.
+
 ## Notes
 
 - Real verification benefits from residential proxies for geo-targeting

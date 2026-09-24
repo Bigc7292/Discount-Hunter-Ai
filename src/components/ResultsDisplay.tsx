@@ -173,6 +173,11 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
                 : 'candidates'}
               {' '}at the real store — none applied. Unverified codes are never shown.
             </p>
+            {result.dominantFailureReason && (
+              <p className="text-amber-400/80 font-mono text-[11px] mt-3">
+                Most failures: {result.dominantFailureReason}
+              </p>
+            )}
             <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg
                             bg-hunter-green/5 border border-hunter-green/20 text-hunter-green/70
                             text-[10px] font-mono uppercase tracking-wider">
