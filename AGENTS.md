@@ -59,7 +59,7 @@ Enforce path is on [PR #4](https://github.com/Bigc7292/Discount-Hunter-Ai/pull/4
 │ • findInfluencer()  │                     │ • Real checkout test│
 │ • checkGlitch()     │                     │ • Geo-proxy testing  │
 │                     │                     │                     │
-│ Uses NVIDIA NIM      │                     │ Puppeteer + proxies │
+│ Uses NVIDIA NIM      │                     │ Browserless+Bright  │
 └──────────────────────┘                     └──────────┴──────────┘
                                                         │
                      ┌─────────────────────────────────┼───────────────────────┐
@@ -150,6 +150,11 @@ VITE_STRIPE_PUBLISHABLE_KEY=
 ```env
 PORT=3001
 GEMINI_API_KEY=
+# Browserless.io hosted Chrome (primary when set)
+BROWSERLESS_TOKEN=
+# BROWSERLESS_API_TOKEN=   # alias
+# BROWSERLESS_WS_ENDPOINT=wss://production-sfo.browserless.io
+# Bright Data geo rotating residential (per testRegion)
 RESIDENTIAL_PROXY_API_KEY=
 RESIDENTIAL_PROXY_PROVIDER=brightdata
 RESIDENTIAL_PROXY_CUSTOMER=
@@ -159,6 +164,7 @@ RESIDENTIAL_PROXY_PORT=22225
 # Optional global Chromium override (wins over geo ProxyConfig):
 # PROXY_SERVER=
 # RESIDENTIAL_PROXY_URL=
+# Local Chromium = fallback only when BROWSERLESS_TOKEN unset
 USE_HEADLESS_BROWSER=true
 BROWSER_TIMEOUT_MS=30000
 REDIS_URL=redis://localhost:6379
@@ -217,15 +223,17 @@ npm install && npm run dev
 - Timeouts scale with N: per-code ~55s; batch = bootstrap buffer + N × per-code, **hard max ~20 min**; frontend abort aligned. If Render free kills the HTTP request sooner, progressive/partial results already collected are returned when the batch deadline fires — prefer a paid Node host for large N.
 - Anti-bot: `puppeteer-extra` + stealth plugin (fragile evasions disabled) + CDP overrides; realistic UA/viewport/locale/timezone; jittered human delays + optional mouse moves; homepage/PLP **warm-up** before cart bootstrap.
 - Circuit breaker: on `bot_blocked`, soft-pause once (~10–18s) and retry; if still blocked, abort remaining codes (don't burn the queue).
-- Geo residential proxy (owner supplies; never commit secrets): `RESIDENTIAL_PROXY_API_KEY` (+ optional `RESIDENTIAL_PROXY_CUSTOMER` / `ZONE` / `HOST` / `PORT`). `geoProxy.makeProxy` builds country-matched username; each verify batch adds `-session-{random}` for IP rotation. `browserBot.getBrowser(proxy)` sets Chromium `--proxy-server=host:port` + `page.authenticate`, and **relaunches** the singleton when the effective proxy key changes (US vs UK / new session).
+- **Browser stack (owner locked)**: (1) **Browserless.io** = primary hosted Chrome via `puppeteer.connect` when `BROWSERLESS_TOKEN` (or `BROWSERLESS_API_TOKEN`) is set; (2) **Bright Data** geo rotating residential = existing `geoProxy.ts` / `ProxyConfig` per `testRegion`; (3) **Local Chromium** + stealth = fallback only when Browserless token unset. Render stays a thin API.
+- Browserless WS default: `wss://production-sfo.browserless.io?token=…` (BaaS v2 docs 2026). Override base with `BROWSERLESS_WS_ENDPOINT`. Geo proxy prefers Browserless `externalProxyServer=http://user:pass@host:port` (paid Browserless plan required for third-party proxies); else `launch.args --proxy-server` + `page.authenticate`.
+- Geo residential proxy (owner supplies; never commit secrets): `RESIDENTIAL_PROXY_API_KEY` (+ optional `RESIDENTIAL_PROXY_CUSTOMER` / `ZONE` / `HOST` / `PORT`). `geoProxy.makeProxy` builds country-matched username; each verify batch adds `-session-{random}` for IP rotation. `browserBot.getBrowser(proxy)` attaches proxy to Browserless or local Chromium, and **reconnects/relaunches** the singleton when the effective proxy key changes (US vs UK / new session).
 - Global override: `PROXY_SERVER` or `RESIDENTIAL_PROXY_URL` → Chromium `--proxy-server` (http/socks); wins over geo ProxyConfig. See `backend/.env.example`.
-- `/health` exposes `geoProxyConfigured` + `envProxyOverride`; startup logs geo host/zone/customer presence (never the password).
-- Chromium: `PUPPETEER_EXECUTABLE_PATH` / `CHROME_PATH` or Puppeteer bundled — **never** Windows Chrome default (Render/Linux).
+- `/health` exposes `browserlessConfigured` + `geoProxyConfigured` + `envProxyOverride`; startup logs Browserless CONFIGURED/NOT SET and geo host/zone/customer presence (never the password/token).
+- Local Chromium fallback: `PUPPETEER_EXECUTABLE_PATH` / `CHROME_PATH` or Puppeteer bundled — **never** Windows Chrome default (Render/Linux).
 - Puppeteer-extra under `moduleResolution: NodeNext`: import via `addExtra(vanillaPuppeteer)` — do not `import puppeteer from 'puppeteer-extra'` (tsc TS2339 on `.use` / `.launch`; Render Docker `npm run build` fails exit 2 even with `noEmitOnError: false`).
 - **AgentMail** inbox `discount-hunter@agentmail.to` is for **future OTP only** until `AGENTMAIL_API_KEY` is set on Render **and** `fetchLatestOtp` is implemented. Do not expect AgentMail to fix cart bootstrap, Nike bot-blocks, or page-load timeouts.
 
 ## Notes
 
-- Real verification benefits from **residential** proxies for geo-targeting (Nike often bot-blocks datacenter IPs on Render free tier). Prefer `RESIDENTIAL_PROXY_API_KEY` (+ Bright Data customer/zone) so `testRegion` maps to a country-matched rotating exit IP. `PROXY_SERVER` / `RESIDENTIAL_PROXY_URL` remain a global override. Do not invent or commit credentials.
-- Without proxies, verification still runs but without geo-specific results and higher bot-block risk
+- Real verification benefits from **Browserless + Bright Data residential** (Nike often bot-blocks datacenter IPs on Render free tier). Set `BROWSERLESS_TOKEN` for hosted Chrome and `RESIDENTIAL_PROXY_API_KEY` (+ Bright Data customer/zone) so `testRegion` maps to a country-matched rotating exit IP. `PROXY_SERVER` / `RESIDENTIAL_PROXY_URL` remain a global override. Do not invent or commit credentials.
+- Without Browserless, local Chromium still runs (fallback). Without geo proxies, verification still runs but without geo-specific results and higher bot-block risk. Browserless `externalProxyServer` needs a paid Browserless plan.
 - See [MIGRATION_TODO.md](./MIGRATION_TODO.md) for DoD gates before launch
