@@ -1,14 +1,18 @@
 /**
  * Discovery Orchestrator — the brain of the real-time code discovery pipeline
  *
- * Runs all discovery sources in PARALLEL:
- *   1. Serper (Google search)     → fast, broad coverage
- *   2. Jina (coupon page scraper) → deep, structured coupon pages
- *   3. Zernio (Reddit + social)   → community-verified, real codes
- *   4. Tavily (AI search)         → deep content for influencer codes
+ * Work tree stages (see /DISCOVERY_WORK_TREE.md):
+ *   Stage A — Web search:     Serper + Tavily
+ *   Stage B — Deal aggregators: Jina scrapeCouponPages (RetailMeNot etc.)
+ *   Stage C — Social:         Zernio (Reddit + connected social)
+ *   Stage D — Merchant/deep:  Jina scrapeUrls on Serper hits (Firecrawl ready, not wired)
+ *   Stage E — Influencer:     Serper/Tavily query angles (bios via future URL scrape)
  *
- * Then extracts codes from ALL collected text using the code extractor.
- * Returns deduplicated candidates sorted by confidence.
+ * Runtime today: Stages A–C + E query angles run in PARALLEL (Phase 1), then Stage D
+ * URL scrape (Phase 2). All feed an INTERNAL candidate pool → extract → dedupe →
+ * region/heuristic filter → caller VERIFIES via checkout sim.
+ *
+ * CORE LAW: candidates are never user-facing until simulated checkout verifies them.
  */
 
 import { searchForCodes as serperSearch } from './serperService.js';
@@ -97,14 +101,15 @@ export async function discoverCodes(
 
   console.log(`\n🔍 DISCOVERY START: "${storeName}" | domain: ${domain} | region: ${region}`);
 
-  // ── PHASE 1: Parallel source collection ─────────────────────────────────────
-  console.log('[Orchestrator] Phase 1: Running all sources in parallel...');
+  // ── PHASE 1: Parallel Stages A + B + C (+ E via search query angles) ─────────
+  // Stage A: Serper + Tavily | Stage B: Jina aggregators | Stage C: Zernio social
+  console.log('[Orchestrator] Phase 1: Running Stages A/B/C in parallel...');
 
   const [serperResults, jinaResults, socialResults, tavilyResults] = await Promise.allSettled([
-    serperSearch(storeName, domain, region),
-    scrapeCouponPages(storeName, domain, region, 6),
-    searchSocialMedia(storeName, domain, region),
-    tavilySearchForCodes(storeName, domain, region),
+    serperSearch(storeName, domain, region),       // Stage A (+ E query angles)
+    scrapeCouponPages(storeName, domain, region, 6), // Stage B
+    searchSocialMedia(storeName, domain, region),  // Stage C
+    tavilySearchForCodes(storeName, domain, region), // Stage A (+ E)
   ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : []));
 
   // Track what ran successfully
@@ -113,7 +118,7 @@ export async function discoverCodes(
   if ((socialResults as any[]).length > 0) sourcesSearched.push('Reddit & Social (Zernio)');
   if ((tavilyResults as any[]).length > 0) sourcesSearched.push('AI Web Search (Tavily)');
 
-  // ── PHASE 2: Scrape top URLs from Serper results ──────────────────────────
+  // ── PHASE 2: Stage D — deep scrape top Serper URLs (Jina; Firecrawl optional later)
   const serperUrls = (serperResults as any[])
     .map((r: any) => r.url)
     .filter(u => u && u.startsWith('http') && !u.includes('reddit.com'))
@@ -125,7 +130,7 @@ export async function discoverCodes(
 
   if (scrapedSerperPages.length > 0) sourcesSearched.push('Scraped Search Results (Jina)');
 
-  // ── PHASE 3: Aggregate all text sources ──────────────────────────────────
+  // ── PHASE 3: Candidate pool — aggregate all stage texts (INTERNAL ONLY) ──
   const allSources = [
     ...(serperResults as any[]),
     ...(jinaResults as any[]),
@@ -136,8 +141,8 @@ export async function discoverCodes(
 
   console.log(`[Orchestrator] Collected ${allSources.length} text sources total`);
 
-  // ── PHASE 4: Extract codes from all text ────────────────────────────────────────
-  console.log('[Orchestrator] Phase 2: Extracting codes from all sources...');
+  // ── PHASE 4: Extract + heuristics (still candidates — not verified) ───────────
+  console.log('[Orchestrator] Phase 4: Extracting candidate codes from all sources...');
 
   // ── Prepare sources: only keep those that already look like markdown ─────────────────
   const preparedSources = await Promise.all(
@@ -177,7 +182,8 @@ export async function discoverCodes(
     }
   }
 
-  // ── PHASE 5: Sort, filter by region compatibility, and return ─────────────
+  // ── PHASE 5: Dedupe already done via Map; region filter + confidence sort ─
+  // Caller must VERIFY via checkout simulation before any user-facing display.
   const confidenceOrder = { high: 0, medium: 1, low: 2 };
   const candidates = [...codeMap.values()]
     .filter(c => {

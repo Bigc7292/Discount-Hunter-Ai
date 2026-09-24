@@ -50,10 +50,11 @@ Backend (separate terminal):
 cd backend && npm install && cp .env.example .env && npm run dev
 ```
 
-Env key names (values stay local / host secrets): see `.env.example` and `backend/.env.example`. Launch-PR keys (pending merge) include `VITE_STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_LIFETIME_PRICE_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `AGENTMAIL_INBOX_EMAIL`, `AGENTMAIL_API_KEY`, and rate-limit / ledger keys.
+Env key names (values stay local / host secrets): see `.env.example` and `backend/.env.example`. **Discovery keys** (add to backend `.env`): `SERPER_API_KEY` (add first), `TAVILY_API_KEY`, `ZERNIO_API_KEY`, `ZERNIO_REDDIT_ACCOUNT_ID`, `FIRECRAWL_API_KEY` (optional), `NVIDIA_API_KEY` (optional LLM extract). Full work tree: [DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md). Launch-PR keys include `VITE_STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_LIFETIME_PRICE_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `AGENTMAIL_INBOX_EMAIL`, `AGENTMAIL_API_KEY`, and rate-limit / ledger keys.
 
 ## Docs
 
+* [DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md) — **discovery stages** (Serper/Tavily/Jina/Zernio/Firecrawl), source order, env keys; candidates stay internal until verify
 * [AGENTS.md](./AGENTS.md) — pipeline, confidence, local run
 * [ARCHITECTURE.md](./ARCHITECTURE.md) — funnel & UI hierarchy
 * [MIGRATION_TODO.md](./MIGRATION_TODO.md) — DoD / launch checklist (tied to open PRs)
