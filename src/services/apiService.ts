@@ -87,8 +87,11 @@ export async function verifyCodes(
   testRegion: string
 ): Promise<VerificationResponse | null> {
   try {
+    // Align with searchService verifierTimeoutFor — large N needs up to ~20 min
+    const perCode = 55_000;
+    const timeoutMs = Math.min(1_260_000, 120_000 + codes.length * perCode);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120_000); // 2 min
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     const response = await fetch(`${API_BASE_URL}/verify`, {
       method: 'POST',

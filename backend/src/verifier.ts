@@ -21,11 +21,18 @@ import { getGeoLocation } from './geoProxy.js';
 import { simulateCheckout, simulateCheckoutBatch } from './browserBot.js';
 import { appendLedgerFromResult } from './ledger.js';
 
-// Maximum time to verify ALL codes in a batch (cart bootstrap + checkout is slower)
-const BATCH_TIMEOUT_MS = 300_000; // 5 minutes
+// Per-code budget inside a cart session (apply + read) — ~45–60s
+const PER_CODE_TIMEOUT_MS = 55_000;
 
-// Per-code budget inside a cart session (apply + read)
-const PER_CODE_TIMEOUT_MS = 60_000;
+// Batch budget scales with N; hard ceiling ~20 min (Render free may kill sooner — see AGENTS.md)
+const BATCH_BOOTSTRAP_BUFFER_MS = 90_000;
+const BATCH_TIMEOUT_MAX_MS = 1_200_000; // 20 minutes
+
+/** Overall batch deadline: bootstrap buffer + N × per-code, capped. */
+export function batchTimeoutFor(codeCount: number): number {
+  const n = Math.max(1, codeCount);
+  return Math.min(BATCH_TIMEOUT_MAX_MS, BATCH_BOOTSTRAP_BUFFER_MS + n * PER_CODE_TIMEOUT_MS);
+}
 
 // ---------------------------------------------------------------------------
 // Confidence scoring
@@ -224,11 +231,16 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
   console.log(`\n[Verifier] Starting: ${codes.length} codes for "${merchant.name}" (${testRegion})`);
 
   const results: CodeVerificationResult[] = [];
-  const batchDeadline = Date.now() + BATCH_TIMEOUT_MS;
-
-  // Cap batch size — more codes rarely help when cart navigation is blocked
-  const capped = codes.slice(0, 5);
+  // Owner hard rule: checkout-test EVERY candidate (no codes.slice(0, 5) product cap).
+  const capped = codes;
+  const batchTimeoutMs = batchTimeoutFor(capped.length);
+  const batchDeadline = Date.now() + batchTimeoutMs;
   const geo = getGeoLocation(testRegion);
+
+  console.log(
+    `[Verifier] Batch budget: ${capped.length} codes → ${Math.round(batchTimeoutMs / 1000)}s ` +
+      `(per-code ${PER_CODE_TIMEOUT_MS / 1000}s, max ${BATCH_TIMEOUT_MAX_MS / 1000}s)`
+  );
 
   // Prefer one cart session: bootstrap → checkout promo → apply each → abandon
   // Falls back to per-code simulateCheckout if the batch helper throws hard.
@@ -253,6 +265,7 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
 
   let storeUnreachable = false;
   let storeUnreachableReason = '';
+  let botBlockSoftRetryUsed = false;
 
   for (let i = 0; i < capped.length; i++) {
     const candidate = capped[i];
@@ -323,10 +336,24 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
     results.push(result);
 
     if (result.status === 'error' && isInfrastructureFailure(result.errorMessage)) {
-      storeUnreachable = true;
-      storeUnreachableReason =
-        'Store checkout unreachable (timeout/blocked/cart/promo) — remaining codes not retested this batch';
-      console.warn(`[Verifier] Circuit breaker armed after ${candidate.code}: ${result.errorMessage}`);
+      const msg = (result.errorMessage || '').toLowerCase();
+      const isBot = msg.includes('bot_blocked') || msg.includes('[bot_blocked]');
+      // Soft retry once on bot_blocked: pause with longer delay, then continue one more code
+      // before aborting remaining — don't burn the whole queue into the same block.
+      if (isBot && !botBlockSoftRetryUsed) {
+        botBlockSoftRetryUsed = true;
+        const pauseMs = 10_000 + Math.floor(Math.random() * 8_000);
+        console.warn(
+          `[Verifier] bot_blocked on ${candidate.code} — soft pause ${pauseMs}ms once before continuing`
+        );
+        await new Promise(r => setTimeout(r, pauseMs));
+      } else {
+        storeUnreachable = true;
+        storeUnreachableReason = isBot
+          ? 'Store bot-blocked after soft retry — remaining codes aborted this batch'
+          : 'Store checkout unreachable (timeout/blocked/cart/promo) — remaining codes not retested this batch';
+        console.warn(`[Verifier] Circuit breaker armed after ${candidate.code}: ${result.errorMessage}`);
+      }
     }
 
     try {
