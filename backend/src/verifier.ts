@@ -15,7 +15,8 @@ import type {
   MerchantInfo,
   VerificationRequest,
   VerificationResponse,
-  CodeVerificationResult
+  CodeVerificationResult,
+  ProxyConfig,
 } from './types.js';
 import { getGeoLocation } from './geoProxy.js';
 import { simulateCheckout, simulateCheckoutBatch } from './browserBot.js';
@@ -165,9 +166,11 @@ function resultFromBrowser(
 async function verifySingleCode(
   merchant: MerchantInfo,
   candidate: CandidateCode,
-  region: string
+  region: string,
+  proxyOverride?: ProxyConfig
 ): Promise<CodeVerificationResult> {
-  const geo = getGeoLocation(region);
+  // Prefer caller-provided proxy (same rotating session for the batch); else fresh geo session
+  const proxy = proxyOverride ?? getGeoLocation(region, { rotateSession: true }).proxy;
 
   console.log(`  Testing: ${candidate.code}`);
 
@@ -181,7 +184,7 @@ async function verifySingleCode(
     const result = await simulateCheckout(
       merchant.url,
       candidate.code,
-      geo.proxy,
+      proxy,
       PER_CODE_TIMEOUT_MS
     );
 
@@ -235,7 +238,17 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
   const capped = codes;
   const batchTimeoutMs = batchTimeoutFor(capped.length);
   const batchDeadline = Date.now() + batchTimeoutMs;
-  const geo = getGeoLocation(testRegion);
+  // One rotating residential session per hunt (country-matched); Chromium relaunches if proxy key changes
+  const geo = getGeoLocation(testRegion, { rotateSession: true });
+  if (geo.proxy) {
+    console.log(
+      `[Verifier] Geo proxy: ${geo.proxy.host}:${geo.proxy.port} ` +
+        `user=${geo.proxy.username?.replace(/session-[a-f0-9]+/i, 'session-***') || '(none)'} ` +
+        `(${geo.country})`
+    );
+  } else {
+    console.log('[Verifier] Geo proxy: not configured — verifying on server IP');
+  }
 
   console.log(
     `[Verifier] Batch budget: ${capped.length} codes → ${Math.round(batchTimeoutMs / 1000)}s ` +
@@ -330,7 +343,7 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
         br.discountAmount
       );
     } else {
-      result = await verifySingleCode(merchant, candidate, testRegion);
+      result = await verifySingleCode(merchant, candidate, testRegion, geo.proxy);
     }
 
     results.push(result);

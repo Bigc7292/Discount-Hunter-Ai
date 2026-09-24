@@ -152,6 +152,13 @@ PORT=3001
 GEMINI_API_KEY=
 RESIDENTIAL_PROXY_API_KEY=
 RESIDENTIAL_PROXY_PROVIDER=brightdata
+RESIDENTIAL_PROXY_CUSTOMER=
+RESIDENTIAL_PROXY_ZONE=residential
+RESIDENTIAL_PROXY_HOST=brd.superproxy.io
+RESIDENTIAL_PROXY_PORT=22225
+# Optional global Chromium override (wins over geo ProxyConfig):
+# PROXY_SERVER=
+# RESIDENTIAL_PROXY_URL=
 USE_HEADLESS_BROWSER=true
 BROWSER_TIMEOUT_MS=30000
 REDIS_URL=redis://localhost:6379
@@ -210,12 +217,15 @@ npm install && npm run dev
 - Timeouts scale with N: per-code ~55s; batch = bootstrap buffer + N × per-code, **hard max ~20 min**; frontend abort aligned. If Render free kills the HTTP request sooner, progressive/partial results already collected are returned when the batch deadline fires — prefer a paid Node host for large N.
 - Anti-bot: `puppeteer-extra` + stealth plugin (fragile evasions disabled) + CDP overrides; realistic UA/viewport/locale/timezone; jittered human delays + optional mouse moves; homepage/PLP **warm-up** before cart bootstrap.
 - Circuit breaker: on `bot_blocked`, soft-pause once (~10–18s) and retry; if still blocked, abort remaining codes (don't burn the queue).
-- Optional proxy env (owner supplies; never commit secrets): `PROXY_SERVER` or `RESIDENTIAL_PROXY_URL` → Chromium `--proxy-server` (http/socks). See `backend/.env.example`.
+- Geo residential proxy (owner supplies; never commit secrets): `RESIDENTIAL_PROXY_API_KEY` (+ optional `RESIDENTIAL_PROXY_CUSTOMER` / `ZONE` / `HOST` / `PORT`). `geoProxy.makeProxy` builds country-matched username; each verify batch adds `-session-{random}` for IP rotation. `browserBot.getBrowser(proxy)` sets Chromium `--proxy-server=host:port` + `page.authenticate`, and **relaunches** the singleton when the effective proxy key changes (US vs UK / new session).
+- Global override: `PROXY_SERVER` or `RESIDENTIAL_PROXY_URL` → Chromium `--proxy-server` (http/socks); wins over geo ProxyConfig. See `backend/.env.example`.
+- `/health` exposes `geoProxyConfigured` + `envProxyOverride`; startup logs geo host/zone/customer presence (never the password).
 - Chromium: `PUPPETEER_EXECUTABLE_PATH` / `CHROME_PATH` or Puppeteer bundled — **never** Windows Chrome default (Render/Linux).
+- Puppeteer-extra under `moduleResolution: NodeNext`: import via `addExtra(vanillaPuppeteer)` — do not `import puppeteer from 'puppeteer-extra'` (tsc TS2339 on `.use` / `.launch`; Render Docker `npm run build` fails exit 2 even with `noEmitOnError: false`).
 - **AgentMail** inbox `discount-hunter@agentmail.to` is for **future OTP only** until `AGENTMAIL_API_KEY` is set on Render **and** `fetchLatestOtp` is implemented. Do not expect AgentMail to fix cart bootstrap, Nike bot-blocks, or page-load timeouts.
 
 ## Notes
 
-- Real verification benefits from **residential** proxies for geo-targeting (Nike often bot-blocks datacenter IPs on Render free tier). Set `PROXY_SERVER` / `RESIDENTIAL_PROXY_URL` on the host — do not invent or commit credentials.
+- Real verification benefits from **residential** proxies for geo-targeting (Nike often bot-blocks datacenter IPs on Render free tier). Prefer `RESIDENTIAL_PROXY_API_KEY` (+ Bright Data customer/zone) so `testRegion` maps to a country-matched rotating exit IP. `PROXY_SERVER` / `RESIDENTIAL_PROXY_URL` remain a global override. Do not invent or commit credentials.
 - Without proxies, verification still runs but without geo-specific results and higher bot-block risk
 - See [MIGRATION_TODO.md](./MIGRATION_TODO.md) for DoD gates before launch
