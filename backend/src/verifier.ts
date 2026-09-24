@@ -125,7 +125,7 @@ async function verifySingleCode(
       merchant.url,
       candidate.code,
       geo.proxy,
-      35000 // 35s per code
+      20000 // 20s per code — fail fast so batch fits UI timeout
     );
 
     success        = result.success;
@@ -178,12 +178,16 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
   const results: CodeVerificationResult[] = [];
   const batchDeadline = Date.now() + BATCH_TIMEOUT_MS;
 
-  for (const candidate of codes) {
+  // Cap batch size — more codes rarely help when cart navigation is blocked
+  const capped = codes.slice(0, 5);
+  let storeUnreachable = false;
+  let storeUnreachableReason = '';
+
+  for (const candidate of capped) {
     // Check if we've exceeded the batch time limit
     if (Date.now() > batchDeadline) {
       console.warn('[Verifier] Batch timeout reached — stopping early');
-      // Mark remaining codes as error
-      const remaining = codes.slice(results.length);
+      const remaining = capped.slice(results.length);
       for (const c of remaining) {
         const timeoutResult = {
           code: c.code,
@@ -205,8 +209,45 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
       break;
     }
 
+    // Circuit breaker: if checkout page never loads / has no promo field, don't burn more codes
+    if (storeUnreachable) {
+      const skipResult = {
+        code: candidate.code,
+        status: 'error' as const,
+        confidence: 0,
+        errorMessage: storeUnreachableReason || 'Skipped — store checkout unreachable for this batch',
+        testedAt: new Date().toISOString(),
+        testRegion,
+        responseTime: 0,
+        terms: [] as string[],
+      };
+      results.push(skipResult);
+      try {
+        await appendLedgerFromResult(merchant, skipResult, testRegion);
+      } catch {
+        /* non-fatal */
+      }
+      continue;
+    }
+
     const result = await verifySingleCode(merchant, candidate, testRegion);
     results.push(result);
+
+    const err = (result.errorMessage || '').toLowerCase();
+    if (
+      result.status === 'error' &&
+      (err.includes('timeout') ||
+        err.includes('could not locate promo') ||
+        err.includes('blocking automation') ||
+        err.includes('net::') ||
+        err.includes('navigation'))
+    ) {
+      storeUnreachable = true;
+      storeUnreachableReason =
+        'Store checkout unreachable (timeout/blocked/no promo field) — remaining codes not retested this batch';
+      console.warn(`[Verifier] Circuit breaker armed after ${candidate.code}: ${result.errorMessage}`);
+    }
+
     // Public ledger: redacted code only (last4 + hash)
     try {
       await appendLedgerFromResult(merchant, result, testRegion);
@@ -215,7 +256,7 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
     }
 
     // Small pause between codes (be a respectful bot)
-    if (results.length < codes.length) {
+    if (results.length < capped.length && !storeUnreachable) {
       await new Promise(r => setTimeout(r, Math.floor(Math.random() * 1000) + 500));
     }
   }

@@ -193,7 +193,11 @@ export async function discoverCodes(
       // Primary: confidence
       const confDiff = confidenceOrder[a.confidence] - confidenceOrder[b.confidence];
       if (confDiff !== 0) return confDiff;
-      // Secondary: exact region match before GLOBAL
+      // Prefer digit-bearing codes (real promos) over all-letter nav scraps
+      const aDigit = /[0-9]/.test(a.code) ? 0 : 1;
+      const bDigit = /[0-9]/.test(b.code) ? 0 : 1;
+      if (aDigit !== bDigit) return aDigit - bDigit;
+      // Then: exact region match before GLOBAL
       if (a.likelyRegion === region && b.likelyRegion !== region) return -1;
       if (b.likelyRegion === region && a.likelyRegion !== region) return 1;
       return 0;
