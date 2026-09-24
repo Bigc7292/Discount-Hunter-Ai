@@ -18,7 +18,7 @@ import { checkVerifierHealth, discoverCodes } from './apiService';
 const MAX_CODES_TO_VERIFY = 5; // Match backend verifier cap
 
 // Verifier timeout: if backend takes longer than this, abort (ms)
-const VERIFIER_TIMEOUT_MS = 240_000; // ~5 codes × ~45s + buffer
+const VERIFIER_TIMEOUT_MS = 360_000; // cart bootstrap + checkout-stage promo (~5 × 60s + buffer)
 
 const VERIFIER_URL = import.meta.env.VITE_VERIFIER_API_URL ||
   (import.meta.env.PROD
@@ -63,10 +63,14 @@ function dominantFailureReason(results: VerificationResult[]): string | undefine
 
   const bucket = (r: VerificationResult): string => {
     const m = (r.errorMessage || '').toLowerCase();
-    if (/timeout|slow or blocking/.test(m)) return 'page load timeout';
-    if (/empty cart|no promo field|item may be required/.test(m)) return 'empty cart or no promo field';
+    if (/\[bot_blocked\]|bot_blocked|challenge|access denied/.test(m)) return 'store blocked automation';
+    if (/\[timeout\]|timeout|slow or blocking/.test(m)) return 'page load timeout';
+    if (/\[cart_bootstrap_failed\]|cart_bootstrap_failed/.test(m)) return 'could not add item to cart';
+    if (/\[no_promo_field\]|no_promo_field|empty cart|no promo field|item may be required/.test(m)) {
+      return 'empty cart or no promo field';
+    }
     if (/could not locate promo/.test(m)) return 'no promo field on cart';
-    if (/no discount|no promo/.test(m)) return 'no promo / discount signal';
+    if (/\[code_rejected\]|code_rejected|no discount|no promo/.test(m)) return 'code rejected / no discount signal';
     if (/invalid|not valid|expired|rejected|not applicable/.test(m) || r.status === 'expired' || r.status === 'failed') {
       return 'invalid or rejected at checkout';
     }
