@@ -10,8 +10,10 @@
  * Strategy (matches owner constraints):
  *   A) Invoke `agent-reach` / documented upstream CLIs when present in PATH
  *      (yt-dlp YouTube search; optional twitter/rdt/opencli when cookies set)
- *   B) Node zero-config pieces without cookies:
- *      - Exa MCP HTTP (`https://mcp.exa.ai/mcp`) — keyless, rate-limited
+ *   B) Node Exa paths (candidates only):
+ *      - Prefer native `POST https://api.exa.ai/search` when EXA_API_KEY is set
+ *        (recommended shape: type auto + contents.highlights — see build-with-exa skill)
+ *      - Else keyless Exa MCP HTTP (`https://mcp.exa.ai/mcp`) — rate-limited
  *      - Jina Reader already covers web read elsewhere; not duplicated here
  *   C) Reddit/X cookie paths: stub + log — optional sidecar / owner session later
  *
@@ -123,8 +125,81 @@ function parseMcpSseJson(body: string): any | null {
 }
 
 /**
+ * Authenticated Exa Search API — preferred when EXA_API_KEY is set.
+ * Shape follows Exa build-with-exa skill: query + type auto + contents.highlights only.
+ * numResults is an intentional product batch size for the candidate pool (not boilerplate).
+ */
+async function searchExaApi(query: string, numResults: number = 5): Promise<AgentReachResult[]> {
+  const apiKey = process.env.EXA_API_KEY?.trim();
+  if (!apiKey) return [];
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), EXA_TIMEOUT_MS);
+
+    const response = await fetch('https://api.exa.ai/search', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        query,
+        type: 'auto',
+        numResults,
+        contents: { highlights: true },
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      console.warn(`[AgentReach] Exa /search HTTP ${response.status}: ${errText.slice(0, 200)}`);
+      return [];
+    }
+
+    const data = (await response.json()) as {
+      results?: Array<{
+        title?: string;
+        url?: string;
+        highlights?: string[];
+        text?: string;
+        publishedDate?: string;
+      }>;
+    };
+
+    const results: AgentReachResult[] = [];
+    for (const item of data.results || []) {
+      const title = item.title || 'Exa result';
+      const url = item.url || '';
+      const highlightText = Array.isArray(item.highlights)
+        ? item.highlights.filter(Boolean).join('\n')
+        : '';
+      const body = highlightText || item.text || '';
+      const text = `${title}\n${body}`.trim();
+      if (text.length < 20) continue;
+      results.push({
+        text: text.slice(0, 6000),
+        url,
+        source: 'Agent-Reach: Exa Search API',
+      });
+    }
+
+    console.log(`[AgentReach] Exa /search returned ${results.length} texts`);
+    return results;
+  } catch (error) {
+    if ((error as Error).name !== 'AbortError') {
+      console.warn('[AgentReach] Exa /search failed:', (error as Error).message);
+    }
+    return [];
+  }
+}
+
+/**
  * Zero-config Exa semantic search via hosted MCP (no API key required; rate-limited).
- * FACT: Agent-Reach routes Exa through mcporter; we call the same free MCP HTTP endpoint from Node.
+ * Fallback when EXA_API_KEY is unset. FACT: same free MCP HTTP endpoint Agent-Reach uses.
  */
 async function searchExaMcp(query: string, numResults: number = 5): Promise<AgentReachResult[]> {
   try {
@@ -347,7 +422,7 @@ async function searchCookieSocialStubs(storeName: string): Promise<AgentReachRes
 
 /**
  * Search social / semantic angles via Agent-Reach paths for a store.
- * Prefer Exa (zero-config) + yt-dlp when present; cookie platforms are optional.
+ * Prefer Exa (/search when keyed, else MCP) + yt-dlp when present; cookie platforms optional.
  */
 export async function searchViaAgentReach(
   storeName: string,
@@ -367,8 +442,13 @@ export async function searchViaAgentReach(
   const year = new Date().getFullYear();
   const exaQuery = `${storeName} promo code OR coupon OR discount ${region} ${year}`;
 
+  // Prefer authenticated /search when keyed; else keyless MCP
+  const exaSearch = process.env.EXA_API_KEY?.trim()
+    ? () => searchExaApi(exaQuery, 5)
+    : () => searchExaMcp(exaQuery, 5);
+
   const settled = await Promise.allSettled([
-    searchExaMcp(exaQuery, 5),
+    exaSearch(),
     searchYoutubeViaYtDlp(storeName),
     searchCookieSocialStubs(storeName),
   ]);
