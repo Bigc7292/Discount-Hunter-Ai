@@ -1,6 +1,7 @@
 /**
  * Jina Reader Service — converts any URL to clean markdown
- * FREE — no API key needed, 20 requests/minute on anonymous tier
+ * Anonymous tier works without a key (~20 req/min).
+ * Set JINA_API_KEY for higher authenticated rate limits (Bearer).
  *
  * Used to scrape coupon aggregator pages:
  * - retailmenot.com/view/STORE
@@ -19,6 +20,20 @@ interface JinaResult {
   source: string;
 }
 
+function jinaHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Accept': 'text/plain',
+    'X-Return-Format': 'markdown',
+    // Remove scripts, nav, ads for cleaner coupon text
+    'X-Remove-Selector': 'nav,footer,header,script,style,iframe,.ad,.advertisement,.cookie-banner',
+  };
+  const key = process.env.JINA_API_KEY?.trim();
+  if (key) {
+    headers['Authorization'] = `Bearer ${key}`;
+  }
+  return headers;
+}
+
 /**
  * Scrape a single URL via Jina Reader → clean markdown text
  */
@@ -29,12 +44,7 @@ async function scrapeUrl(url: string): Promise<string | null> {
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     const response = await fetch(jinaUrl, {
-      headers: {
-        'Accept': 'text/plain',
-        'X-Return-Format': 'markdown',
-        // Remove scripts, nav, ads for cleaner coupon text
-        'X-Remove-Selector': 'nav,footer,header,script,style,iframe,.ad,.advertisement,.cookie-banner',
-      },
+      headers: jinaHeaders(),
       signal: controller.signal,
     });
 
@@ -109,7 +119,7 @@ function buildCouponPageUrls(storeName: string, domain: string, region: string):
 
 /**
  * Scrape top coupon pages for a store — runs in parallel with 5s stagger
- * to stay within Jina's 20 req/min rate limit
+ * to stay within Jina's rate limit (anonymous ~20/min; keyed = higher)
  */
 export async function scrapeCouponPages(
   storeName: string,
