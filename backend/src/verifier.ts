@@ -8,6 +8,13 @@
  * - Per-code ~60s; batch timeout raised for multi-step checkout flows
  * - Better confidence scoring with real factors
  * - Categorized errorMessages: cart_bootstrap_failed | no_promo_field | code_rejected | timeout | bot_blocked
+ * - HONEST COUNTS: `totalTested` = codes actually applied at the promo field.
+ *   Codes that never got there (browser connect, proxy auth, bot block, empty cart,
+ *   timeout) are `couldNotTest` with a stage + reason — never counted as "tested"
+ *   and never reported as "rejected at checkout".
+ * - Browser route fallback (browserRoute.ts): Browserless externalProxyServer →
+ *   Browserless built-in residential → Browserless direct, when a route fails
+ *   before reaching the store (e.g. HTTP 401 paid-plan-only third-party proxy).
  */
 
 import type {
@@ -17,10 +24,20 @@ import type {
   VerificationResponse,
   CodeVerificationResult,
   ProxyConfig,
+  VerifyStage,
 } from './types.js';
 import { getGeoLocation } from './geoProxy.js';
 import { simulateCheckout, simulateCheckoutBatch } from './browserBot.js';
 import { appendLedgerFromResult } from './ledger.js';
+import {
+  applyVerifyRoute,
+  isBrowserStartFailure,
+  markExternalProxyRejected,
+  planVerifyRoutes,
+  probeBrowserlessHandshake,
+  restoreWsEndpoint,
+  type VerifyRoute,
+} from './browserRoute.js';
 
 // Per-code budget inside a cart session (apply + read) — ~45–60s
 const PER_CODE_TIMEOUT_MS = 55_000;
@@ -33,6 +50,79 @@ const BATCH_TIMEOUT_MAX_MS = 1_200_000; // 20 minutes
 export function batchTimeoutFor(codeCount: number): number {
   const n = Math.max(1, codeCount);
   return Math.min(BATCH_TIMEOUT_MAX_MS, BATCH_BOOTSTRAP_BUFFER_MS + n * PER_CODE_TIMEOUT_MS);
+}
+
+// ---------------------------------------------------------------------------
+// Stage classification — did the code actually reach the promo field?
+// ---------------------------------------------------------------------------
+
+/** Short UI/log-safe labels (no code strings). */
+export const STAGE_LABELS: Record<VerifyStage, string> = {
+  applied: 'applied at promo field',
+  browser_connect: 'checkout browser could not start (hosted browser connect failed)',
+  proxy_auth: 'residential proxy rejected the connection (auth/tunnel)',
+  bot_blocked: 'store blocked automation',
+  cart_bootstrap: 'could not add an item to the cart',
+  no_promo_field: 'promo field not reached (empty cart / no promo field)',
+  timeout: 'page load timeout',
+  navigation: 'store page failed to load',
+  skipped: 'skipped after an earlier checkout failure',
+  unknown: 'checkout step failed before the code was entered',
+};
+
+function isProxyFailure(m: string): boolean {
+  return (
+    /\b407\b/.test(m) ||
+    m.includes('proxy auth') ||
+    m.includes('err_tunnel_connection_failed') ||
+    m.includes('err_proxy_connection_failed') ||
+    m.includes('err_proxy_auth') ||
+    m.includes('err_no_supported_proxies') ||
+    m.includes('err_proxy_certificate_invalid')
+  );
+}
+
+/**
+ * Where did this attempt end? 'applied' ONLY when the browser test passed or the
+ * store answered the applied code (categorized [code_rejected] / expired / invalid).
+ */
+export function classifyStage(success: boolean, errorMessage?: string): VerifyStage {
+  if (success) return 'applied';
+  const m = (errorMessage || '').toLowerCase();
+
+  // Infrastructure first — "Invalid BROWSERLESS_WS_ENDPOINT" must not read as an invalid code
+  if (isBrowserStartFailure(m)) return 'browser_connect';
+  if (isProxyFailure(m)) return 'proxy_auth';
+
+  // browserBot categorized prefixes
+  const prefix = m.match(/^\s*\[([a-z_]+)\]/)?.[1];
+  if (prefix === 'code_rejected') return 'applied';
+  if (prefix === 'bot_blocked') return 'bot_blocked';
+  if (prefix === 'cart_bootstrap_failed') return 'cart_bootstrap';
+  if (prefix === 'no_promo_field') return 'no_promo_field';
+  if (prefix === 'timeout') return 'timeout';
+
+  if (m.includes('bot_blocked') || m.includes('blocking automation')) return 'bot_blocked';
+  if (m.includes('cart_bootstrap_failed')) return 'cart_bootstrap';
+  if (m.includes('no_promo_field') || m.includes('could not locate promo')) return 'no_promo_field';
+  if (m.includes('timeout')) return 'timeout';
+  if (m.includes('net::') || m.includes('navigation')) return 'navigation';
+  if (
+    m.includes('code_rejected') ||
+    m.includes('expired') ||
+    m.includes('invalid') ||
+    m.includes('not valid') ||
+    m.includes('not applicable')
+  ) {
+    return 'applied';
+  }
+  return 'unknown';
+}
+
+/** Route-level failure = nothing reached the store (retry on the next browser route). */
+function isPreStoreRouteFailure(errorMessage?: string): boolean {
+  const stage = classifyStage(false, errorMessage);
+  return stage === 'browser_connect' || stage === 'proxy_auth';
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +153,7 @@ function calculateConfidence(factors: ConfidenceFactors): number {
       if (err.includes('timeout'))    base = 15;
       if (err.includes('bot_blocked') || err.includes('cart_bootstrap_failed')) base = 10;
       if (err.includes('no_promo_field')) base = 12;
+      if (isBrowserStartFailure(err) || isProxyFailure(err)) base = 0;
     }
 
     return Math.max(0, base);
@@ -94,24 +185,14 @@ function calculateConfidence(factors: ConfidenceFactors): number {
 function determineStatus(
   browserTestPassed: boolean,
   confidence: number,
-  errorMessage?: string
+  errorMessage: string | undefined,
+  stage: VerifyStage
 ): CodeVerificationResult['status'] {
-  // Failed at checkout
   if (!browserTestPassed) {
-    if (errorMessage) {
-      const err = errorMessage.toLowerCase();
-      if (err.includes('expired'))  return 'expired';
-      if (err.includes('invalid') || err.includes('not valid') || err.includes('not found') || err.includes('code_rejected')) return 'failed';
-      if (
-        err.includes('timeout') ||
-        err.includes('could not locate') ||
-        err.includes('bot_blocked') ||
-        err.includes('cart_bootstrap_failed') ||
-        err.includes('no_promo_field')
-      ) {
-        return 'error';
-      }
-    }
+    // Never reached the promo field → 'error' (could not test), NOT 'failed' (rejected)
+    if (stage !== 'applied') return 'error';
+    const err = (errorMessage || '').toLowerCase();
+    if (err.includes('expired')) return 'expired';
     return 'failed';
   }
 
@@ -141,9 +222,15 @@ function resultFromBrowser(
     errorMessage: lastError,
   });
 
-  const status = determineStatus(success, confidence, lastError);
+  const stage = classifyStage(success, lastError);
+  const status = determineStatus(success, confidence, lastError, stage);
+  const reachedPromoField = stage === 'applied';
 
-  console.log(`  ${status === 'verified' ? '✓' : '✗'} ${candidate.code}: ${status} (confidence: ${confidence}%)`);
+  const why = !reachedPromoField && lastError ? ` — ${lastError.slice(0, 160)}` : '';
+  console.log(
+    `  ${status === 'verified' ? '✓' : '✗'} ${candidate.code}: ${status} ` +
+      `[${reachedPromoField ? 'applied' : `not tested: ${stage}`}] (confidence: ${confidence}%)${why}`
+  );
 
   return {
     code: candidate.code,
@@ -156,6 +243,28 @@ function resultFromBrowser(
     testRegion: region,
     responseTime,
     terms: extractTerms(candidate.description),
+    reachedPromoField,
+    stage,
+  };
+}
+
+function notTestedResult(
+  code: string,
+  region: string,
+  stage: VerifyStage,
+  errorMessage: string
+): CodeVerificationResult {
+  return {
+    code,
+    status: 'error',
+    confidence: 0,
+    errorMessage,
+    testedAt: new Date().toISOString(),
+    testRegion: region,
+    responseTime: 0,
+    terms: [],
+    reachedPromoField: false,
+    stage,
   };
 }
 
@@ -220,8 +329,58 @@ function isInfrastructureFailure(errorMessage?: string): boolean {
     err.includes('could not locate promo') ||
     err.includes('blocking automation') ||
     err.includes('net::') ||
-    err.includes('navigation')
+    err.includes('navigation') ||
+    isBrowserStartFailure(err) ||
+    isProxyFailure(err)
   );
+}
+
+/** Human detail for a route that failed before reaching the store (probe Browserless for the real HTTP reason). */
+async function describeRouteFailure(
+  route: VerifyRoute,
+  originalWs: string | undefined,
+  errorMessage: string | undefined
+): Promise<string> {
+  if (route.kind !== 'local' && isBrowserStartFailure(errorMessage)) {
+    const probe = await probeBrowserlessHandshake(route, originalWs);
+    if (probe.status && probe.status !== 101) {
+      if (route.kind === 'browserless-external-proxy' && /paid|third-party proxy/i.test(probe.message)) {
+        markExternalProxyRejected(`HTTP ${probe.status}: ${probe.message}`);
+      }
+      return `HTTP ${probe.status}: ${probe.message || 'handshake refused'}`;
+    }
+    if (probe.status === 0) return `connect failed (${probe.message})`;
+    return `probe handshake OK, puppeteer connect still failed: ${(errorMessage || '').replace('[object Object]', '').slice(0, 160)}`;
+  }
+  return (errorMessage || 'browser route failed').slice(0, 200);
+}
+
+// ---------------------------------------------------------------------------
+// Honest summary
+// ---------------------------------------------------------------------------
+
+function summarize(results: CodeVerificationResult[]) {
+  const stageCounts: Partial<Record<VerifyStage, number>> = {};
+  for (const r of results) {
+    const s = r.stage || 'unknown';
+    stageCounts[s] = (stageCounts[s] || 0) + 1;
+  }
+  const tested = results.filter(r => r.reachedPromoField).length;
+  const couldNotTest = results.length - tested;
+
+  let dominant: VerifyStage | undefined;
+  let best = 0;
+  for (const [stage, n] of Object.entries(stageCounts) as [VerifyStage, number][]) {
+    if (stage === 'applied' || stage === 'skipped') continue;
+    if (n > best) {
+      best = n;
+      dominant = stage;
+    }
+  }
+  if (!dominant && stageCounts.skipped) dominant = 'skipped';
+  const couldNotTestReason = couldNotTest > 0 && dominant ? STAGE_LABELS[dominant] : undefined;
+
+  return { stageCounts, tested, couldNotTest, couldNotTestReason };
 }
 
 // ---------------------------------------------------------------------------
@@ -255,120 +414,156 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
       `(per-code ${PER_CODE_TIMEOUT_MS / 1000}s, max ${BATCH_TIMEOUT_MAX_MS / 1000}s)`
   );
 
+  const proxyCountry = geo.countryCode && geo.countryCode !== 'XX' ? geo.countryCode.toLowerCase() : undefined;
+  const originalWs = process.env.BROWSERLESS_WS_ENDPOINT;
+  const routes = planVerifyRoutes(geo.proxy, proxyCountry);
+  let activeRoute: VerifyRoute = routes[routes.length - 1];
+  let activeProxy: ProxyConfig | undefined = activeRoute.proxy;
+  const routeFailures: string[] = [];
+  /** Set when every browser route failed before reaching the store */
+  let allRoutesFailed: { stage: VerifyStage; message: string } | null = null;
+
   // Prefer one cart session: bootstrap → checkout promo → apply each → abandon
   // Falls back to per-code simulateCheckout if the batch helper throws hard.
   let browserResults: Awaited<ReturnType<typeof simulateCheckoutBatch>> | null = null;
 
   try {
-    console.log(
-      `[Verifier] Cart-session verify: bootstrap → checkout-stage promo → abandon (${capped.length} codes)`
-    );
-    browserResults = await simulateCheckoutBatch(
-      merchant.url,
-      capped.map(c => c.code),
-      geo.proxy,
-      PER_CODE_TIMEOUT_MS
-    );
-  } catch (batchErr) {
-    console.warn(
-      '[Verifier] Batch session failed, falling back to per-code:',
-      batchErr instanceof Error ? batchErr.message : batchErr
-    );
-  }
+    for (let r = 0; r < routes.length; r++) {
+      const route = routes[r];
+      const hasNext = r < routes.length - 1;
+      activeRoute = route;
+      activeProxy = await applyVerifyRoute(route, originalWs);
 
-  let storeUnreachable = false;
-  let storeUnreachableReason = '';
-  let botBlockSoftRetryUsed = false;
+      let batch: Awaited<ReturnType<typeof simulateCheckoutBatch>> | null = null;
+      let batchErr: string | undefined;
+      try {
+        console.log(
+          `[Verifier] Cart-session verify: bootstrap → checkout-stage promo → abandon (${capped.length} codes)`
+        );
+        batch = await simulateCheckoutBatch(
+          merchant.url,
+          capped.map(c => c.code),
+          activeProxy,
+          PER_CODE_TIMEOUT_MS
+        );
+      } catch (err) {
+        batchErr = err instanceof Error ? err.message : String(err);
+        console.warn('[Verifier] Batch session failed:', batchErr);
+      }
 
-  for (let i = 0; i < capped.length; i++) {
-    const candidate = capped[i];
+      const firstErr = batch?.find(b => !b.success)?.errorMessage || batchErr;
+      const preStore = batch
+        ? batch.length > 0 && batch.every(b => !b.success && isPreStoreRouteFailure(b.errorMessage))
+        : isPreStoreRouteFailure(batchErr);
 
-    if (Date.now() > batchDeadline) {
-      console.warn('[Verifier] Batch timeout reached — stopping early');
-      const remaining = capped.slice(results.length);
-      for (const c of remaining) {
-        const timeoutResult = {
-          code: c.code,
-          status: 'error' as const,
-          confidence: 0,
-          errorMessage: '[timeout] Verification timeout — batch took too long',
-          testedAt: new Date().toISOString(),
-          testRegion,
-          responseTime: 0,
-          terms: [] as string[],
+      if (!preStore) {
+        // Store was reached (or batch helper threw for another reason → per-code fallback below)
+        browserResults = batch;
+        break;
+      }
+
+      const detail = await describeRouteFailure(route, originalWs, firstErr);
+      routeFailures.push(`${route.label}: ${detail}`);
+      console.warn(
+        `[Verifier] Route failed before reaching the store — ${route.label}: ${detail}` +
+          (hasNext ? ' → falling back to next browser route' : ' → no routes left')
+      );
+      if (!hasNext) {
+        allRoutesFailed = {
+          stage: classifyStage(false, firstErr),
+          message: `${(firstErr || 'Browser route failed').replace('[object Object]', '').trim()} ${detail}`.trim(),
         };
-        results.push(timeoutResult);
-        try {
-          await appendLedgerFromResult(merchant, timeoutResult, testRegion);
-        } catch {
-          /* non-fatal */
+      }
+    }
+
+    let storeUnreachable = false;
+    let storeUnreachableReason = '';
+    let botBlockSoftRetryUsed = false;
+
+    for (let i = 0; i < capped.length; i++) {
+      const candidate = capped[i];
+
+      if (allRoutesFailed) {
+        results.push(notTestedResult(candidate.code, testRegion, allRoutesFailed.stage, allRoutesFailed.message));
+        continue;
+      }
+
+      if (Date.now() > batchDeadline) {
+        console.warn('[Verifier] Batch timeout reached — stopping early');
+        const remaining = capped.slice(results.length);
+        for (const c of remaining) {
+          results.push(
+            notTestedResult(c.code, testRegion, 'timeout', '[timeout] Verification timeout — batch took too long')
+          );
+        }
+        break;
+      }
+
+      if (storeUnreachable) {
+        results.push(
+          notTestedResult(
+            candidate.code,
+            testRegion,
+            'skipped',
+            storeUnreachableReason || 'Skipped — store checkout unreachable for this batch'
+          )
+        );
+        continue;
+      }
+
+      let result: CodeVerificationResult;
+
+      if (browserResults && browserResults[i]) {
+        const br = browserResults[i];
+        result = resultFromBrowser(
+          candidate,
+          testRegion,
+          br.success,
+          br.pageLoadTime || 0,
+          br.errorMessage,
+          br.discountText,
+          br.discountAmount
+        );
+      } else {
+        result = await verifySingleCode(merchant, candidate, testRegion, activeProxy);
+      }
+
+      results.push(result);
+
+      // Circuit breaker only in per-code mode: batch results were already all attempted,
+      // so overwriting later real outcomes with "skipped" would hide what actually happened.
+      if (!browserResults && result.status === 'error' && isInfrastructureFailure(result.errorMessage)) {
+        const msg = (result.errorMessage || '').toLowerCase();
+        const isBot = msg.includes('bot_blocked') || msg.includes('[bot_blocked]');
+        // Soft retry once on bot_blocked: pause with longer delay, then continue one more code
+        // before aborting remaining — don't burn the whole queue into the same block.
+        if (isBot && !botBlockSoftRetryUsed) {
+          botBlockSoftRetryUsed = true;
+          const pauseMs = 10_000 + Math.floor(Math.random() * 8_000);
+          console.warn(
+            `[Verifier] bot_blocked on ${candidate.code} — soft pause ${pauseMs}ms once before continuing`
+          );
+          await new Promise(r => setTimeout(r, pauseMs));
+        } else {
+          storeUnreachable = true;
+          storeUnreachableReason = isBot
+            ? 'Store bot-blocked after soft retry — remaining codes aborted this batch'
+            : 'Store checkout unreachable (timeout/blocked/cart/promo) — remaining codes not retested this batch';
+          console.warn(`[Verifier] Circuit breaker armed after ${candidate.code}: ${result.errorMessage}`);
         }
       }
-      break;
-    }
 
-    if (storeUnreachable) {
-      const skipResult = {
-        code: candidate.code,
-        status: 'error' as const,
-        confidence: 0,
-        errorMessage:
-          storeUnreachableReason ||
-          'Skipped — store checkout unreachable for this batch',
-        testedAt: new Date().toISOString(),
-        testRegion,
-        responseTime: 0,
-        terms: [] as string[],
-      };
-      results.push(skipResult);
-      try {
-        await appendLedgerFromResult(merchant, skipResult, testRegion);
-      } catch {
-        /* non-fatal */
-      }
-      continue;
-    }
-
-    let result: CodeVerificationResult;
-
-    if (browserResults && browserResults[i]) {
-      const br = browserResults[i];
-      result = resultFromBrowser(
-        candidate,
-        testRegion,
-        br.success,
-        br.pageLoadTime || 0,
-        br.errorMessage,
-        br.discountText,
-        br.discountAmount
-      );
-    } else {
-      result = await verifySingleCode(merchant, candidate, testRegion, geo.proxy);
-    }
-
-    results.push(result);
-
-    if (result.status === 'error' && isInfrastructureFailure(result.errorMessage)) {
-      const msg = (result.errorMessage || '').toLowerCase();
-      const isBot = msg.includes('bot_blocked') || msg.includes('[bot_blocked]');
-      // Soft retry once on bot_blocked: pause with longer delay, then continue one more code
-      // before aborting remaining — don't burn the whole queue into the same block.
-      if (isBot && !botBlockSoftRetryUsed) {
-        botBlockSoftRetryUsed = true;
-        const pauseMs = 10_000 + Math.floor(Math.random() * 8_000);
-        console.warn(
-          `[Verifier] bot_blocked on ${candidate.code} — soft pause ${pauseMs}ms once before continuing`
-        );
-        await new Promise(r => setTimeout(r, pauseMs));
-      } else {
-        storeUnreachable = true;
-        storeUnreachableReason = isBot
-          ? 'Store bot-blocked after soft retry — remaining codes aborted this batch'
-          : 'Store checkout unreachable (timeout/blocked/cart/promo) — remaining codes not retested this batch';
-        console.warn(`[Verifier] Circuit breaker armed after ${candidate.code}: ${result.errorMessage}`);
+      if (results.length < capped.length && !storeUnreachable && !browserResults) {
+        await new Promise(r => setTimeout(r, Math.floor(Math.random() * 1000) + 500));
       }
     }
+  } finally {
+    restoreWsEndpoint(originalWs);
+  }
 
+  // Public ledger = simulated-checkout outcomes only; codes that never reached the promo field are not "fail" rows
+  for (const result of results) {
+    if (!result.reachedPromoField) continue;
     try {
       await appendLedgerFromResult(merchant, result, testRegion);
     } catch (ledgerErr) {
@@ -377,28 +572,44 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
         ledgerErr instanceof Error ? ledgerErr.message : ledgerErr
       );
     }
-
-    if (results.length < capped.length && !storeUnreachable && !browserResults) {
-      await new Promise(r => setTimeout(r, Math.floor(Math.random() * 1000) + 500));
-    }
   }
 
   const successful = results.filter(r => r.status === 'verified').length;
-  const failed = results.filter(r => r.status === 'failed' || r.status === 'expired').length;
-  const unverified = results.filter(r => r.status === 'unverified' || r.status === 'error').length;
+  const failed = results.filter(r => r.reachedPromoField && (r.status === 'failed' || r.status === 'expired')).length;
+  const { stageCounts, tested, couldNotTest, couldNotTestReason } = summarize(results);
+
+  const testSummary =
+    tested === 0 && couldNotTest > 0
+      ? `0 of ${results.length} codes could be tested: ${couldNotTestReason || 'checkout not reached'}`
+      : `${tested} of ${results.length} codes tested at the promo field ` +
+        `(${successful} verified, ${failed} rejected)` +
+        (couldNotTest > 0
+          ? `; ${couldNotTest} could not be tested${couldNotTestReason ? `: ${couldNotTestReason}` : ''}`
+          : '');
+
+  const browserRoute =
+    activeRoute.label + (routeFailures.length ? ` (fallbacks: ${routeFailures.join(' | ')})` : '');
 
   console.log(
-    `[Verifier] Complete: ${successful} verified, ${failed} failed, ${unverified} unverified\n`
+    `[Verifier] Complete: ${successful} verified, ${failed} rejected, ${couldNotTest} could not be tested ` +
+      `(of ${results.length}) | stages=${JSON.stringify(stageCounts)}`
   );
+  console.log(`[Verifier] ${testSummary} | route: ${browserRoute}\n`);
 
   return {
     merchant,
     results,
-    totalTested: results.length,
+    totalTested: tested,
     successful,
     failed,
     testedAt: new Date().toISOString(),
     region: testRegion,
+    totalAttempted: results.length,
+    couldNotTest,
+    couldNotTestReason,
+    stageCounts,
+    testSummary,
+    browserRoute,
   };
 }
 
