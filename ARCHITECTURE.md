@@ -37,7 +37,14 @@ Pricing / Stripe modal and ledger components ship on PR #1 / #2 branches (pendin
 ## 3. Search Pipeline (current intent)
 1. **Deploy**: Operative enters merchant + optional location.
 2. **Discover**: Multi-source **candidate** pool only (Serper / Jina / Agent-Reach / Tavily; Zernio optional when keyed; Firecrawl ready but not yet orchestrated) — see **[DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md)**. Candidates are **never** user-facing alone.
-3. **Verify**: Backend checkout simulation (Puppeteer ± geo proxies).
+3. **Verify**: Backend checkout simulation (Puppeteer ± geo proxies). Hosted browser comes from a provider chain (`backend/src/browserProviders.ts`, `browserRoute.ts`):
+   * Order: `BROWSER_PROVIDER_ORDER` (default `kernel,cloudflare,browserless,local`); a provider with missing env vars is skipped.
+   * **Kernel** (`KERNEL_API_KEY`): REST-created stealth browser, `puppeteer.connect` to its `cdp_ws_url`, always deleted by id afterwards (`KERNEL_TIMEOUT_SECONDS`, `KERNEL_HEADLESS` optional).
+   * **Cloudflare Browser Run** (`CF_ACCOUNT_ID`, `CF_API_TOKEN`): CDP WebSocket with Bearer header, `keep_alive` up to 10 min (`CF_BROWSER_KEEP_ALIVE_MS` optional); closed after each run.
+   * **Browserless** (`BROWSERLESS_TOKEN`): unchanged ladder — Bright Data `externalProxyServer` → built-in residential → direct.
+   * **Local Chromium**: unchanged launch + geo proxy.
+   * Connect failure / HTTP 401 / 402 / 429 / quota → next provider, with the reason logged; refusing providers cool down (429 honours `Retry-After`). Provider name and browser seconds are logged per run; `/health` exposes `kernelConfigured` / `cloudflareBrowserConfigured` / `browserlessConfigured` booleans.
+   * Honest counts are unchanged: codes that never reach the promo field are `couldNotTest` with a stage + reason.
 4. **Display**: **Verified-only** results — no unverified/social codes in UI. **CORE LAW**: never surface unverified codes.
 5. **Persist**: Inbox / history via Firestore when PR #1 merges; AgentMail for merchant OTP stub when PR #3 merges.
 

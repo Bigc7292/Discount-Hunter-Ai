@@ -31,7 +31,7 @@ Do **not** treat these as present on `main` until merged.
 
 * **Frontend**: React + TypeScript + Vite, Tailwind, Framer Motion
 * **Discovery**: NVIDIA NIM (`meta/llama-3.3-70b-instruct`) + backend discovery services
-* **Verification**: Backend (Express + Puppeteer / geo proxies)
+* **Verification**: Backend (Express + Puppeteer / geo proxies) — hosted-browser provider chain `BROWSER_PROVIDER_ORDER` (default `kernel,cloudflare,browserless,local`); unconfigured providers are skipped, and connect failure / 401 / 402 / 429 / quota falls through to the next provider
 * **Auth & DB**: Firebase (Auth & Firestore)
 
 ## Quick start
@@ -50,7 +50,7 @@ Backend (separate terminal):
 cd backend && npm install && cp .env.example .env && npm run dev
 ```
 
-Env key names (values stay local / host secrets): see `.env.example` and `backend/.env.example`. **Discovery keys** (add to backend `.env`): `SERPER_API_KEY` (add first), `TAVILY_API_KEY`, then rely on **Jina Reader (no key)**; leave `ZERNIO_*` empty for **zero Zernio cost** (optional/paused); Agent-Reach Stage C is **wired** (`AGENT_REACH_ENABLED=1` default — Exa MCP zero-config; optional CLIs/cookies — see [DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md)); `FIRECRAWL_API_KEY` (optional), `NVIDIA_API_KEY` (optional LLM extract). **Free path:** Serper + Tavily + Jina + Agent-Reach/Exa; Zernio skipped when key absent. Launch-PR keys include `VITE_STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_LIFETIME_PRICE_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `AGENTMAIL_INBOX_EMAIL`, `AGENTMAIL_API_KEY`, and rate-limit / ledger keys.
+Env key names (values stay local / host secrets): see `.env.example` and `backend/.env.example`. **Discovery keys** (add to backend `.env`): `SERPER_API_KEY` (add first), `TAVILY_API_KEY`, then rely on **Jina Reader (no key)**; leave `ZERNIO_*` empty for **zero Zernio cost** (optional/paused); Agent-Reach Stage C is **wired** (`AGENT_REACH_ENABLED=1` default — Exa MCP zero-config; optional CLIs/cookies — see [DISCOVERY_WORK_TREE.md](./DISCOVERY_WORK_TREE.md)); `FIRECRAWL_API_KEY` (optional), `NVIDIA_API_KEY` (optional LLM extract). **Free path:** Serper + Tavily + Jina + Agent-Reach/Exa; Zernio skipped when key absent. **Checkout verifier browser keys** (backend): `BROWSER_PROVIDER_ORDER` (optional), `KERNEL_API_KEY` (+ optional `KERNEL_TIMEOUT_SECONDS`, `KERNEL_HEADLESS`), `CF_ACCOUNT_ID` + `CF_API_TOKEN` (+ optional `CF_BROWSER_KEEP_ALIVE_MS`), `BROWSERLESS_TOKEN`; `/health` reports `kernelConfigured`, `cloudflareBrowserConfigured`, `browserlessConfigured` (booleans). Launch-PR keys include `VITE_STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_LIFETIME_PRICE_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `AGENTMAIL_INBOX_EMAIL`, `AGENTMAIL_API_KEY`, and rate-limit / ledger keys.
 
 ## Docs
 
