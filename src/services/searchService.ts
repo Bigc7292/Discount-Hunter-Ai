@@ -53,16 +53,27 @@ interface VerificationResult {
   discountText?: string;
   discountAmount?: string;
   responseTime?: number;
+  /** true ONLY when the code was entered at the store's promo field (backend honest counts) */
+  reachedPromoField?: boolean;
+  /** Stage where the attempt ended: applied | browser_connect | proxy_auth | bot_blocked | … */
+  stage?: string;
 }
 
 interface VerificationResponse {
   merchant: { name: string; url: string; region: string };
   results: VerificationResult[];
+  /** Codes actually applied at the promo field (older backends: all attempted) */
   totalTested: number;
   successful: number;
   failed: number;
   unverified: number;
   processingTimeMs: number;
+  totalAttempted?: number;
+  /** Codes that never reached the promo field */
+  couldNotTest?: number;
+  couldNotTestReason?: string;
+  testSummary?: string;
+  browserRoute?: string;
 }
 
 
@@ -73,6 +84,12 @@ function dominantFailureReason(results: VerificationResult[]): string | undefine
 
   const bucket = (r: VerificationResult): string => {
     const m = (r.errorMessage || '').toLowerCase();
+    if (r.stage === 'browser_connect' || /failed to connect to browserless|failed to launch chrome/.test(m)) {
+      return 'checkout browser could not start';
+    }
+    if (r.stage === 'proxy_auth' || /\b407\b|err_tunnel_connection_failed|err_proxy/.test(m)) {
+      return 'residential proxy rejected the connection';
+    }
     if (/\[bot_blocked\]|bot_blocked|challenge|access denied/.test(m)) return 'store blocked automation';
     if (/\[timeout\]|timeout|slow or blocking/.test(m)) return 'page load timeout';
     if (/\[cart_bootstrap_failed\]|cart_bootstrap_failed/.test(m)) return 'could not add item to cart';
@@ -289,7 +306,7 @@ export async function runSearch(
         'error'
       );
       addLog(
-        `HONEST RESULT: 0 verified / ${toVerify.length} attempted of ${discovered.length} discovered (none shown — integrity maintained)`,
+        `HONEST RESULT: 0 verified / ${toVerify.length} attempted of ${discovered.length} discovered — none confirmed tested (none shown — integrity maintained)`,
         'warning'
       );
       setStatus(SearchStatus.COMPLETE);
@@ -301,10 +318,12 @@ export async function runSearch(
         competitors: discovery.competitors,
         verifierOnline: true,
         dominantFailureReason: timedOut ? 'page load timeout' : 'verifier error',
+        testSummary: `0 of ${toVerify.length} codes confirmed tested: verifier ${timedOut ? 'timed out' : 'error'} before returning results`,
         stats: {
           sourcesScanned: discovered.length,
           codesDiscovered: discovered.length,
-          codesTested: toVerify.length,
+          codesTested: 0,
+          codesCouldNotTest: toVerify.length,
           codesVerified: 0,
           timeTaken: `${((Date.now() - startTime) / 1000).toFixed(1)}s`,
           moneySavedEstimate: '$0.00',
@@ -360,9 +379,20 @@ export async function runSearch(
     // With verify-all, untested only occurs if the batch budget/circuit stopped early.
     const untestedCount = Math.max(0, discovered.length - toVerify.length);
 
+    // Honest counts: newer backends mark whether each code actually reached the promo field.
+    // Older backends (no couldNotTest) keep the previous behaviour.
+    const hasHonestCounts = typeof verificationResponse.couldNotTest === 'number';
+    const reachedPromo = (r: VerificationResult) => (hasHonestCounts ? r.reachedPromoField === true : true);
+
     const failedCount = allResults.filter(r =>
       r.status === 'failed' || r.status === 'expired' || r.status === 'error'
     ).length;
+    const rejectedCount = allResults.filter(r =>
+      reachedPromo(r) && (r.status === 'failed' || r.status === 'expired' || (!hasHonestCounts && r.status === 'error'))
+    ).length;
+    const couldNotTestCount = hasHonestCounts ? verificationResponse.couldNotTest || 0 : 0;
+    // Newer backends: totalTested = applied at promo field. Older: all attempted.
+    const codesTested = verificationResponse.totalTested;
 
     const unverifiedCount = allResults.filter(r => r.status === 'unverified').length;
 
@@ -371,9 +401,23 @@ export async function runSearch(
       `VERIFICATION COMPLETE: ${verifiedCodes.length}/${toVerify.length} CODES CONFIRMED AT CHECKOUT`,
       verifiedCodes.length > 0 ? 'success' : 'warning'
     );
+    if (verificationResponse.testSummary) {
+      addLog(`VERIFIER STATUS: ${verificationResponse.testSummary}`, couldNotTestCount > 0 ? 'warning' : 'info');
+    }
+    if (verificationResponse.browserRoute) {
+      addLog(`CHECKOUT BROWSER ROUTE: ${verificationResponse.browserRoute.slice(0, 200)}`, 'info');
+    }
 
-    if (failedCount > 0) {
-      addLog(`${failedCount} CODE${failedCount !== 1 ? 'S' : ''} REJECTED AT CHECKOUT`, 'info');
+    if (rejectedCount > 0) {
+      addLog(`${rejectedCount} CODE${rejectedCount !== 1 ? 'S' : ''} REJECTED AT CHECKOUT`, 'info');
+    }
+
+    if (couldNotTestCount > 0) {
+      addLog(
+        `${couldNotTestCount} CODE${couldNotTestCount !== 1 ? 'S' : ''} COULD NOT BE TESTED (never reached the promo field)` +
+          (verificationResponse.couldNotTestReason ? ` — ${verificationResponse.couldNotTestReason}` : ''),
+        'warning'
+      );
     }
 
     if (untestedCount > 0) {
@@ -402,11 +446,16 @@ export async function runSearch(
       unverifiedCount: failedCount + unverifiedCount + untestedCount,
       competitors: discovery.competitors,
       verifierOnline: true,
-      dominantFailureReason: verifiedCodes.length === 0 ? failureReason : undefined,
+      dominantFailureReason:
+        verifiedCodes.length === 0
+          ? (hasHonestCounts && codesTested === 0 && verificationResponse.couldNotTestReason) || failureReason
+          : undefined,
+      testSummary: verificationResponse.testSummary,
       stats: {
         sourcesScanned: discovered.length,
         codesDiscovered: discovered.length,
-        codesTested: verificationResponse.totalTested,
+        codesTested,
+        codesCouldNotTest: couldNotTestCount,
         codesVerified: verifiedCodes.length,
         timeTaken: verificationResponse.processingTimeMs
           ? `${(verificationResponse.processingTimeMs / 1000).toFixed(1)}s`
@@ -418,7 +467,14 @@ export async function runSearch(
     if (verifiedCodes.length > 0) {
       addLog(`✓ MISSION COMPLETE: ${verifiedCodes.length} VERIFIED CODE${verifiedCodes.length !== 1 ? 'S' : ''} READY`, 'success');
     } else {
-      addLog(`MISSION COMPLETE: 0 verified / ${toVerify.length} tested — no fake codes returned`, 'warning');
+      addLog(
+        hasHonestCounts
+          ? `MISSION COMPLETE: 0 verified / ${codesTested} tested at the promo field` +
+              (couldNotTestCount > 0 ? ` (${couldNotTestCount} could not be tested)` : '') +
+              ' — no fake codes returned'
+          : `MISSION COMPLETE: 0 verified / ${toVerify.length} tested — no fake codes returned`,
+        'warning'
+      );
     }
 
     // ─── PHASE 4: INTERNAL SIGNALS (non-blocking, never shown as codes) ─────

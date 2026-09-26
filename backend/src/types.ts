@@ -18,6 +18,23 @@ export interface VerificationRequest {
   testRegion: string;
 }
 
+/**
+ * Where a code's checkout attempt ended.
+ * 'applied' = the code was actually entered in the store's promo field and the store answered.
+ * Everything else = the code could NOT be tested (never reached the promo field).
+ */
+export type VerifyStage =
+  | 'applied'
+  | 'browser_connect'
+  | 'proxy_auth'
+  | 'bot_blocked'
+  | 'cart_bootstrap'
+  | 'no_promo_field'
+  | 'timeout'
+  | 'navigation'
+  | 'skipped'
+  | 'unknown';
+
 export interface CodeVerificationResult {
   code: string;
   status: 'verified' | 'failed' | 'expired' | 'error' | 'unverified';
@@ -29,16 +46,34 @@ export interface CodeVerificationResult {
   testRegion: string;
   responseTime?: number;
   terms?: string[];
+  /** true ONLY when the code was entered at the promo field and the store responded */
+  reachedPromoField?: boolean;
+  /** Stage where the attempt ended ('applied' when reachedPromoField) */
+  stage?: VerifyStage;
 }
 
 export interface VerificationResponse {
   merchant: MerchantInfo;
   results: CodeVerificationResult[];
+  /** Codes actually applied at the promo field (NOT just attempted) */
   totalTested: number;
   successful: number;
+  /** Tested codes the store rejected / expired */
   failed: number;
   testedAt: string;
   region: string;
+  /** All codes submitted to the verifier */
+  totalAttempted?: number;
+  /** Codes that never reached the promo field (browser/proxy/bot/cart/timeout) */
+  couldNotTest?: number;
+  /** Dominant human reason for couldNotTest (no code strings) */
+  couldNotTestReason?: string;
+  /** Per-stage counts, e.g. { browser_connect: 20 } */
+  stageCounts?: Partial<Record<VerifyStage, number>>;
+  /** Honest one-line status, e.g. "0 of 20 codes could be tested: checkout browser could not start" */
+  testSummary?: string;
+  /** Hosted-browser route used for the batch (no secrets) */
+  browserRoute?: string;
 }
 
 export interface GeoLocation {

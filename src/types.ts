@@ -47,10 +47,13 @@ export interface SearchResult {
   verifierOnline: boolean;      // Was the backend verifier reachable during this search?
   /** Short human reason when 0 codes verified (no code strings). e.g. "page load timeout" */
   dominantFailureReason?: string;
+  /** Honest one-line verifier status, e.g. "0 of 20 codes could be tested: checkout browser could not start" */
+  testSummary?: string;
   stats: {
     sourcesScanned: number;
     codesDiscovered: number;    // Total candidates from AI discovery
-    codesTested: number;        // How many went through checkout simulation
+    codesTested: number;        // How many were actually APPLIED at the store's promo field
+    codesCouldNotTest?: number; // Sent to checkout but never reached the promo field (browser/proxy/bot/cart/timeout)
     codesVerified: number;      // How many PASSED checkout (matches codes.length)
     timeTaken: string;
     moneySavedEstimate: string;
