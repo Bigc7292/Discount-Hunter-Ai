@@ -6,10 +6,16 @@
  * non-paid Browserless plans, so every code failed at connect and was still
  * counted as "tested". This module lets the verifier fall back automatically:
  *
- *   1. Browserless + Bright Data via externalProxyServer (paid Browserless plan)
- *   2. Browserless built-in residential proxy (proxy=residential&proxyCountry=cc)
- *   3. Browserless direct (datacenter exit IP)
- *   (local Chromium + geo proxy only when BROWSERLESS_TOKEN is unset)
+ * Provider chain (browserProviders.ts): BROWSER_PROVIDER_ORDER, default
+ * `kernel,cloudflare,browserless,local`; providers with missing env vars are skipped,
+ * providers in cooldown (401/402/429/quota) are skipped with a log line.
+ *
+ *   kernel      → Kernel cloud browser (stealth)
+ *   cloudflare  → Cloudflare Browser Run
+ *   browserless → 1. Browserless + Bright Data via externalProxyServer (paid Browserless plan)
+ *                 2. Browserless built-in residential proxy (proxy=residential&proxyCountry=cc)
+ *                 3. Browserless direct (datacenter exit IP)
+ *   local       → local Chromium + geo proxy
  *
  * Optional BROWSERLESS_PROXY_MODE: auto (default) | external | builtin | none
  *
@@ -21,13 +27,22 @@
 import https from 'https';
 import { randomBytes } from 'crypto';
 import type { ProxyConfig } from './types.js';
-import { cleanup, getBrowserlessToken, isBrowserlessConfigured } from './browserBot.js';
+import { cleanup, getBrowserlessToken, isBrowserlessConfigured, setBrowserProvider } from './browserBot.js';
+import {
+  type BrowserProvider,
+  PROVIDER_LABELS,
+  getProviderOrder,
+  isProviderConfigured,
+  providerCooldown,
+} from './browserProviders.js';
 
 const DEFAULT_BROWSERLESS_WS = 'wss://production-sfo.browserless.io';
 /** Skip the external-proxy route for a while after Browserless refuses it (no-cost 401, but noisy). */
 const EXTERNAL_REJECT_TTL_MS = 30 * 60_000;
 
 export type VerifyRouteKind =
+  | 'kernel'
+  | 'cloudflare'
   | 'browserless-external-proxy'
   | 'browserless-builtin-residential'
   | 'browserless-direct'
@@ -35,6 +50,8 @@ export type VerifyRouteKind =
 
 export interface VerifyRoute {
   kind: VerifyRouteKind;
+  /** Browser provider behind this route */
+  provider: BrowserProvider;
   /** Human label for logs / API (no secrets) */
   label: string;
   /** ProxyConfig handed to simulateCheckoutBatch (undefined = no third-party proxy) */
@@ -50,17 +67,83 @@ function proxyMode(): 'auto' | 'external' | 'builtin' | 'none' {
   return m === 'external' || m === 'builtin' || m === 'none' ? m : 'auto';
 }
 
+/** Provider behind a route kind. */
+export function providerOfRoute(route: VerifyRoute): BrowserProvider {
+  return route.provider;
+}
+
 /**
- * Ordered list of routes to try for this batch.
+ * Ordered list of routes to try for this batch, following BROWSER_PROVIDER_ORDER.
  * @param proxyCountry ISO-2 lowercase (us, gb, …) or undefined for GLOBAL
  */
 export function planVerifyRoutes(
   geoProxy: ProxyConfig | undefined,
   proxyCountry: string | undefined
 ): VerifyRoute[] {
-  if (!isBrowserlessConfigured()) {
-    return [{ kind: 'local', label: 'local Chromium' + (geoProxy ? ' + geo proxy' : ''), proxy: geoProxy }];
+  const order = getProviderOrder();
+  const all: VerifyRoute[] = [];
+  const skipped: string[] = [];
+  const cooling: string[] = [];
+  for (const provider of order) {
+    if (!isProviderConfigured(provider)) {
+      skipped.push(provider);
+      continue;
+    }
+    const cd = providerCooldown(provider);
+    if (cd) {
+      cooling.push(`${provider} (${Math.round(cd.remainingMs / 1000)}s left: ${cd.reason})`);
+      continue;
+    }
+    all.push(...routesForProvider(provider, geoProxy, proxyCountry));
   }
+
+  console.log(
+    `[BrowserRoute] Provider order: ${order.join(' → ')}` +
+      (skipped.length ? ` | not configured (skipped): ${skipped.join(', ')}` : '') +
+      (cooling.length ? ` | cooling down (skipped): ${cooling.join('; ')}` : '')
+  );
+
+  if (all.length === 0) {
+    // Everything configured is cooling down (or order excludes local) — try the configured
+    // providers anyway rather than failing without an attempt.
+    for (const provider of order) {
+      if (isProviderConfigured(provider)) all.push(...routesForProvider(provider, geoProxy, proxyCountry));
+    }
+  }
+  if (all.length === 0) {
+    all.push(localRoute(geoProxy));
+  }
+  return all;
+}
+
+function localRoute(geoProxy: ProxyConfig | undefined): VerifyRoute {
+  return { kind: 'local', provider: 'local', label: 'local Chromium' + (geoProxy ? ' + geo proxy' : ''), proxy: geoProxy };
+}
+
+function routesForProvider(
+  provider: BrowserProvider,
+  geoProxy: ProxyConfig | undefined,
+  proxyCountry: string | undefined
+): VerifyRoute[] {
+  switch (provider) {
+    case 'kernel':
+      // Kernel stealth mode uses Kernel's own stealth proxy; Bright Data creds are not passed
+      return [{ kind: 'kernel', provider, label: `${PROVIDER_LABELS.kernel} (stealth)` }];
+    case 'cloudflare':
+      return [{ kind: 'cloudflare', provider, label: PROVIDER_LABELS.cloudflare }];
+    case 'browserless':
+      return planBrowserlessRoutes(geoProxy, proxyCountry);
+    case 'local':
+      return [localRoute(geoProxy)];
+  }
+}
+
+/** Existing Browserless route ladder (unchanged behaviour). */
+function planBrowserlessRoutes(
+  geoProxy: ProxyConfig | undefined,
+  proxyCountry: string | undefined
+): VerifyRoute[] {
+  if (!isBrowserlessConfigured()) return [];
 
   const mode = proxyMode();
   const routes: VerifyRoute[] = [];
@@ -75,6 +158,7 @@ export function planVerifyRoutes(
     } else {
       routes.push({
         kind: 'browserless-external-proxy',
+        provider: 'browserless',
         label: 'Browserless + Bright Data (externalProxyServer)',
         proxy: geoProxy,
       });
@@ -84,28 +168,31 @@ export function planVerifyRoutes(
   if (proxyCountry && (mode === 'auto' || mode === 'builtin')) {
     routes.push({
       kind: 'browserless-builtin-residential',
+      provider: 'browserless',
       label: `Browserless built-in residential proxy (${proxyCountry})`,
       wsQuery: { proxy: 'residential', proxyCountry },
     });
   }
 
   if (mode === 'auto' || mode === 'none' || routes.length === 0) {
-    routes.push({ kind: 'browserless-direct', label: 'Browserless direct (datacenter IP)' });
+    routes.push({ kind: 'browserless-direct', provider: 'browserless', label: 'Browserless direct (datacenter IP)' });
   }
 
   return routes;
 }
 
 /**
- * Point browserBot at a route: sets BROWSERLESS_WS_ENDPOINT query params and
- * drops the singleton so the next getBrowser() reconnects with them.
+ * Point browserBot at a route: selects the provider, sets BROWSERLESS_WS_ENDPOINT
+ * query params for Browserless routes, and drops the singleton so the next
+ * getBrowser() reconnects with them (this also deletes any Kernel session).
  * Returns the ProxyConfig to pass to simulateCheckoutBatch.
  */
 export async function applyVerifyRoute(
   route: VerifyRoute,
   originalWsEndpoint: string | undefined
 ): Promise<ProxyConfig | undefined> {
-  if (route.kind !== 'local') {
+  setBrowserProvider(route.provider);
+  if (route.provider === 'browserless') {
     const base = new URL((originalWsEndpoint?.trim() || DEFAULT_BROWSERLESS_WS).replace(/\/$/, ''));
     for (const [k, v] of Object.entries(route.wsQuery || {})) {
       base.searchParams.set(k, v);
@@ -119,6 +206,7 @@ export async function applyVerifyRoute(
 
 /** Restore env after the batch (so /health + next batch start clean). */
 export function restoreWsEndpoint(originalWsEndpoint: string | undefined): void {
+  setBrowserProvider(null);
   if (originalWsEndpoint === undefined) {
     delete process.env.BROWSERLESS_WS_ENDPOINT;
   } else {
@@ -131,6 +219,8 @@ export function isBrowserStartFailure(errorMessage?: string): boolean {
   const m = (errorMessage || '').toLowerCase();
   return (
     m.includes('failed to connect to browserless') ||
+    m.includes('failed to connect to kernel') ||
+    m.includes('failed to connect to cloudflare') ||
     m.includes('failed to launch chrome') ||
     m.includes('browserless_token is not set') ||
     m.includes('invalid browserless_ws_endpoint')
