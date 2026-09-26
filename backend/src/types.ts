@@ -74,6 +74,10 @@ export interface VerificationResponse {
   testSummary?: string;
   /** Hosted-browser route used for the batch (no secrets) */
   browserRoute?: string;
+  /** Browser provider used for the batch: kernel | cloudflare | browserless | local */
+  browserProvider?: string;
+  /** Wall-clock seconds of browser session time on that provider for this run */
+  browserSeconds?: number;
 }
 
 export interface GeoLocation {
