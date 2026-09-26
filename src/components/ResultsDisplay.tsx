@@ -28,6 +28,10 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
   const verifiedCodes = result.codes.filter((c) => c.status === 'verified');
   const verifiedCount = verifiedCodes.length;
   const testedCount = result.stats.codesTested || 0;
+  // Sent to checkout but never reached the promo field (browser/proxy/bot/cart/timeout)
+  const couldNotTestCount = result.stats.codesCouldNotTest || 0;
+  const attemptedCount = testedCount + couldNotTestCount;
+  const noneReachedPromo = testedCount === 0 && couldNotTestCount > 0;
   const discoveredCount = result.stats.codesDiscovered || result.stats.sourcesScanned || 0;
   const isVerifierOffline = !result.verifierOnline;
 
@@ -77,6 +81,15 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
             <div className="text-hunter-cyan font-display font-bold text-xl">{testedCount}</div>
             <div className="text-[9px] text-hunter-muted uppercase font-mono tracking-widest">TESTED</div>
           </div>
+          {couldNotTestCount > 0 && (
+            <>
+              <div className="w-px bg-hunter-border" />
+              <div className="text-center">
+                <div className="text-amber-400 font-display font-bold text-xl">{couldNotTestCount}</div>
+                <div className="text-[9px] text-hunter-muted uppercase font-mono tracking-widest">NOT TESTED</div>
+              </div>
+            </>
+          )}
           <div className="w-px bg-hunter-border" />
           <div className="text-center">
             <div className={`font-display font-bold text-xl ${
@@ -161,19 +174,41 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({
           <div className="cyber-glass border-hunter-border p-10 text-center rounded-xl">
             <XCircle className="text-hunter-muted mx-auto mb-4" size={36} />
             <h3 className="text-white font-display font-bold uppercase italic text-lg mb-2">
-              0 Verified / {testedCount || discoveredCount} Tested
+              {noneReachedPromo
+                ? `0 of ${attemptedCount} Could Be Tested`
+                : `0 Verified / ${testedCount || discoveredCount} Tested`}
             </h3>
-            <p className="text-hunter-muted font-mono text-xs leading-relaxed max-w-sm mx-auto">
-              {discoveredCount > 0
-                ? `Discovered ${discoveredCount} candidate${discoveredCount !== 1 ? 's' : ''}. `
-                : ''}
-              Checkout simulation tested{' '}
-              {testedCount > 0
-                ? `${testedCount} code${testedCount !== 1 ? 's' : ''}`
-                : 'candidates'}
-              {' '}at the real store — none applied. Unverified codes are never shown.
-            </p>
-            {result.dominantFailureReason && (
+            {noneReachedPromo ? (
+              <p className="text-hunter-muted font-mono text-xs leading-relaxed max-w-sm mx-auto">
+                {discoveredCount > 0
+                  ? `Discovered ${discoveredCount} candidate${discoveredCount !== 1 ? 's' : ''}. `
+                  : ''}
+                None reached the store's promo field
+                {result.dominantFailureReason ? ` — ${result.dominantFailureReason}` : ''}. No code was
+                applied, so none can be called valid or invalid. Unverified codes are never shown.
+              </p>
+            ) : (
+              <p className="text-hunter-muted font-mono text-xs leading-relaxed max-w-sm mx-auto">
+                {discoveredCount > 0
+                  ? `Discovered ${discoveredCount} candidate${discoveredCount !== 1 ? 's' : ''}. `
+                  : ''}
+                Checkout simulation tested{' '}
+                {testedCount > 0
+                  ? `${testedCount} code${testedCount !== 1 ? 's' : ''}`
+                  : 'candidates'}
+                {' '}at the real store — none applied.
+                {couldNotTestCount > 0
+                  ? ` ${couldNotTestCount} more could not be tested (never reached the promo field).`
+                  : ''}
+                {' '}Unverified codes are never shown.
+              </p>
+            )}
+            {result.testSummary && (
+              <p className="text-hunter-muted/70 font-mono text-[10px] mt-2">
+                {result.testSummary}
+              </p>
+            )}
+            {result.dominantFailureReason && !noneReachedPromo && (
               <p className="text-amber-400/80 font-mono text-[11px] mt-3">
                 Most failures: {result.dominantFailureReason}
               </p>
