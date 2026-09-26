@@ -414,7 +414,19 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
       `(per-code ${PER_CODE_TIMEOUT_MS / 1000}s, max ${BATCH_TIMEOUT_MAX_MS / 1000}s)`
   );
 
-  const proxyCountry = geo.countryCode && geo.countryCode !== 'XX' ? geo.countryCode.toLowerCase() : undefined;
+  // Browserless built-in residential proxy follows the user's testRegion country.
+  // GLOBAL (no country) → BROWSERLESS_DEFAULT_PROXY_COUNTRY (default US), logged,
+  // instead of silently dropping to a datacenter IP.
+  const regionCountry =
+    geo.countryCode && geo.countryCode !== 'XX' ? geo.countryCode.toLowerCase() : undefined;
+  const defaultProxyCountry = (process.env.BROWSERLESS_DEFAULT_PROXY_COUNTRY || 'us').trim().toLowerCase();
+  const proxyCountry = regionCountry || defaultProxyCountry || undefined;
+  console.log(
+    `[Verifier] Built-in residential proxyCountry=${proxyCountry || 'none'} ` +
+      (regionCountry
+        ? `(from testRegion ${testRegion})`
+        : `(testRegion ${testRegion} has no country → default ${(proxyCountry || 'none').toUpperCase()})`)
+  );
   const originalWs = process.env.BROWSERLESS_WS_ENDPOINT;
   const routes = planVerifyRoutes(geo.proxy, proxyCountry);
   let activeRoute: VerifyRoute = routes[routes.length - 1];
