@@ -12,9 +12,12 @@
  *   Codes that never got there (browser connect, proxy auth, bot block, empty cart,
  *   timeout) are `couldNotTest` with a stage + reason — never counted as "tested"
  *   and never reported as "rejected at checkout".
- * - Browser route fallback (browserRoute.ts): Browserless externalProxyServer →
- *   Browserless built-in residential → Browserless direct, when a route fails
- *   before reaching the store (e.g. HTTP 401 paid-plan-only third-party proxy).
+ * - Browser route fallback (browserRoute.ts): provider chain from
+ *   BROWSER_PROVIDER_ORDER (default kernel → cloudflare → browserless → local);
+ *   Browserless itself tries externalProxyServer → built-in residential → direct.
+ *   Falls through when a route fails before reaching the store (connect failure,
+ *   HTTP 401/402/429, quota) and logs why; refusing providers cool down
+ *   (429 honours Retry-After). Provider + browser seconds are logged per run.
  */
 
 import type {
@@ -27,7 +30,7 @@ import type {
   VerifyStage,
 } from './types.js';
 import { getGeoLocation } from './geoProxy.js';
-import { simulateCheckout, simulateCheckoutBatch } from './browserBot.js';
+import { releaseHostedBrowser, simulateCheckout, simulateCheckoutBatch } from './browserBot.js';
 import { appendLedgerFromResult } from './ledger.js';
 import {
   applyVerifyRoute,
@@ -38,6 +41,14 @@ import {
   restoreWsEndpoint,
   type VerifyRoute,
 } from './browserRoute.js';
+import {
+  PROVIDER_LABELS,
+  cooldownMsFor,
+  isQuotaOrAuthRefusal,
+  markProviderCooldown,
+  probeCloudflareHandshake,
+  providerCooldown,
+} from './browserProviders.js';
 
 // Per-code budget inside a cart session (apply + read) — ~45–60s
 const PER_CODE_TIMEOUT_MS = 55_000;
@@ -123,6 +134,26 @@ export function classifyStage(success: boolean, errorMessage?: string): VerifySt
 function isPreStoreRouteFailure(errorMessage?: string): boolean {
   const stage = classifyStage(false, errorMessage);
   return stage === 'browser_connect' || stage === 'proxy_auth';
+}
+
+/**
+ * Hosted browser session lost / refused mid-run (quota hit, rate limit, remote
+ * disconnect). Only used to decide whether to retry on the next provider when NO
+ * code reached the promo field — it never changes how a result is counted.
+ */
+function isHostedSessionLost(errorMessage?: string): boolean {
+  const m = (errorMessage || '').toLowerCase();
+  // A store-side block (incl. store HTTP 429 pages) is not a provider failure
+  if (m.includes('bot_blocked') || m.includes('blocking automation')) return false;
+  return (
+    isQuotaOrAuthRefusal(0, m) ||
+    /\b(402|429)\b/.test(m) ||
+    m.includes('session closed') ||
+    m.includes('target closed') ||
+    m.includes('browser has disconnected') ||
+    m.includes('connection closed') ||
+    m.includes('websocket is not open')
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -335,24 +366,65 @@ function isInfrastructureFailure(errorMessage?: string): boolean {
   );
 }
 
-/** Human detail for a route that failed before reaching the store (probe Browserless for the real HTTP reason). */
+/**
+ * Human detail for a route that failed before reaching the store (probe Browserless /
+ * Cloudflare for the real HTTP reason). Puts the provider in cooldown on
+ * 401/402/429/quota refusals so later routes/hunts skip it.
+ */
 async function describeRouteFailure(
   route: VerifyRoute,
   originalWs: string | undefined,
   errorMessage: string | undefined
 ): Promise<string> {
-  if (route.kind !== 'local' && isBrowserStartFailure(errorMessage)) {
+  const clean = (errorMessage || '').replace('[object Object]', '').trim();
+
+  if (route.provider === 'kernel') {
+    // Kernel refusals come from our REST create call, so the status is already in the message
+    const status = Number(clean.match(/\(HTTP (\d{3})\)/)?.[1] || 0);
+    const retryAfter = Number(clean.match(/Retry-After (\d+)s/)?.[1] || 0) || undefined;
+    if (isQuotaOrAuthRefusal(status, clean)) {
+      markProviderCooldown('kernel', cooldownMsFor(status, clean, retryAfter), `HTTP ${status || '?'}`);
+    }
+    return (clean || 'Kernel route failed').slice(0, 200);
+  }
+
+  if (route.provider === 'cloudflare') {
+    let status = Number(clean.match(/\(HTTP (\d{3})\)/)?.[1] || 0);
+    let detail = clean || 'Cloudflare route failed';
+    let retryAfter: number | undefined;
+    if (isBrowserStartFailure(errorMessage)) {
+      const probe = await probeCloudflareHandshake();
+      if (probe.status && probe.status !== 101) {
+        status = probe.status;
+        retryAfter = probe.retryAfterSec;
+        detail =
+          `HTTP ${probe.status}: ${probe.message || 'handshake refused'}` +
+          (retryAfter ? ` (Retry-After ${retryAfter}s)` : '');
+      } else if (probe.status === 0) {
+        detail = `connect failed (${probe.message})`;
+      }
+    }
+    if (isQuotaOrAuthRefusal(status, detail)) {
+      markProviderCooldown('cloudflare', cooldownMsFor(status, detail, retryAfter), detail.slice(0, 120));
+    }
+    return detail.slice(0, 200);
+  }
+
+  if (route.provider === 'browserless' && isBrowserStartFailure(errorMessage)) {
     const probe = await probeBrowserlessHandshake(route, originalWs);
     if (probe.status && probe.status !== 101) {
       if (route.kind === 'browserless-external-proxy' && /paid|third-party proxy/i.test(probe.message)) {
         markExternalProxyRejected(`HTTP ${probe.status}: ${probe.message}`);
+      } else if (probe.status === 402 || probe.status === 429 || isQuotaOrAuthRefusal(0, probe.message)) {
+        // Plan quota / rate limit — skip the remaining Browserless routes for a while
+        markProviderCooldown('browserless', cooldownMsFor(probe.status, probe.message), `HTTP ${probe.status}`);
       }
       return `HTTP ${probe.status}: ${probe.message || 'handshake refused'}`;
     }
     if (probe.status === 0) return `connect failed (${probe.message})`;
-    return `probe handshake OK, puppeteer connect still failed: ${(errorMessage || '').replace('[object Object]', '').slice(0, 160)}`;
+    return `probe handshake OK, puppeteer connect still failed: ${clean.slice(0, 160)}`;
   }
-  return (errorMessage || 'browser route failed').slice(0, 200);
+  return (clean || 'browser route failed').slice(0, 200);
 }
 
 // ---------------------------------------------------------------------------
@@ -434,16 +506,37 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
   const routeFailures: string[] = [];
   /** Set when every browser route failed before reaching the store */
   let allRoutesFailed: { stage: VerifyStage; message: string } | null = null;
+  /** Last route failure (used when the remaining routes are skipped by cooldown) */
+  let lastRouteFailure: { stage: VerifyStage; message: string } | null = null;
+  let reachedStore = false;
+  const batchStartedAt = Date.now();
+  /** When the active route's browser work started (browser-seconds logging) */
+  let routeStartedAt = Date.now();
 
   // Prefer one cart session: bootstrap → checkout promo → apply each → abandon
   // Falls back to per-code simulateCheckout if the batch helper throws hard.
   let browserResults: Awaited<ReturnType<typeof simulateCheckoutBatch>> | null = null;
+  let browserSeconds = 0;
 
   try {
     for (let r = 0; r < routes.length; r++) {
       const route = routes[r];
       const hasNext = r < routes.length - 1;
+
+      // A provider refused earlier in THIS batch (401/402/429/quota) — skip its other routes
+      const cd = providerCooldown(route.provider);
+      if (cd && cd.since >= batchStartedAt) {
+        routeFailures.push(`${route.label}: skipped (${PROVIDER_LABELS[route.provider]} cooling down: ${cd.reason})`);
+        console.warn(
+          `[Verifier] Skipping ${route.label} — ${PROVIDER_LABELS[route.provider]} cooling down ` +
+            `(${Math.round(cd.remainingMs / 1000)}s left: ${cd.reason})`
+        );
+        continue;
+      }
+
       activeRoute = route;
+      routeStartedAt = Date.now();
+      console.log(`[Verifier] Browser provider: ${route.provider} (${route.label})`);
       activeProxy = await applyVerifyRoute(route, originalWs);
 
       let batch: Awaited<ReturnType<typeof simulateCheckoutBatch>> | null = null;
@@ -468,24 +561,54 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
         ? batch.length > 0 && batch.every(b => !b.success && isPreStoreRouteFailure(b.errorMessage))
         : isPreStoreRouteFailure(batchErr);
 
-      if (!preStore) {
+      // Hosted session refused / lost mid-run (quota, rate limit, remote disconnect) before ANY
+      // code reached the promo field → retry the whole batch on the next provider. Results
+      // from this route are discarded, never counted.
+      const sessionLost =
+        !preStore &&
+        route.provider !== 'local' &&
+        hasNext &&
+        Date.now() < batchDeadline &&
+        !!batch &&
+        batch.length > 0 &&
+        batch.every(b => !b.success && classifyStage(false, b.errorMessage) !== 'applied') &&
+        isHostedSessionLost(firstErr);
+
+      if (!preStore && !sessionLost) {
         // Store was reached (or batch helper threw for another reason → per-code fallback below)
         browserResults = batch;
+        reachedStore = true;
         break;
       }
 
-      const detail = await describeRouteFailure(route, originalWs, firstErr);
+      const detail = sessionLost
+        ? `hosted session lost before any code was applied (${(firstErr || '').replace('[object Object]', '').slice(0, 160)})`
+        : await describeRouteFailure(route, originalWs, firstErr);
+      if (sessionLost && isQuotaOrAuthRefusal(0, firstErr || '')) {
+        markProviderCooldown(route.provider, cooldownMsFor(0, firstErr || ''), 'quota / rate limit mid-session');
+      }
+      const routeSecs = ((Date.now() - routeStartedAt) / 1000).toFixed(1);
       routeFailures.push(`${route.label}: ${detail}`);
       console.warn(
-        `[Verifier] Route failed before reaching the store — ${route.label}: ${detail}` +
+        `[Verifier] Route failed before reaching the store — ${route.label}: ${detail} ` +
+          `(provider=${route.provider}, ${routeSecs}s)` +
           (hasNext ? ' → falling back to next browser route' : ' → no routes left')
       );
+      lastRouteFailure = {
+        stage: classifyStage(false, firstErr),
+        message: `${(firstErr || 'Browser route failed').replace('[object Object]', '').trim()} ${detail}`.trim(),
+      };
       if (!hasNext) {
-        allRoutesFailed = {
-          stage: classifyStage(false, firstErr),
-          message: `${(firstErr || 'Browser route failed').replace('[object Object]', '').trim()} ${detail}`.trim(),
-        };
+        allRoutesFailed = lastRouteFailure;
       }
+    }
+
+    // Every remaining route was skipped by cooldown after a failure → nothing reached the store
+    if (!reachedStore && !allRoutesFailed) {
+      allRoutesFailed = lastRouteFailure || {
+        stage: 'browser_connect',
+        message: 'Failed to connect to any hosted browser provider (all providers cooling down)',
+      };
     }
 
     let storeUnreachable = false;
@@ -570,6 +693,15 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
       }
     }
   } finally {
+    browserSeconds = Math.round((Date.now() - routeStartedAt) / 100) / 10;
+    console.log(
+      `[Verifier] Browser usage: provider=${activeRoute.provider} route="${activeRoute.label}" ` +
+        `browserSeconds=${browserSeconds}`
+    );
+    // Kernel / Cloudflare are metered per session — end them now (Kernel: delete by id)
+    await releaseHostedBrowser().catch(err =>
+      console.warn('[Verifier] Hosted browser release failed:', err instanceof Error ? err.message : err)
+    );
     restoreWsEndpoint(originalWs);
   }
 
@@ -606,7 +738,9 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
     `[Verifier] Complete: ${successful} verified, ${failed} rejected, ${couldNotTest} could not be tested ` +
       `(of ${results.length}) | stages=${JSON.stringify(stageCounts)}`
   );
-  console.log(`[Verifier] ${testSummary} | route: ${browserRoute}\n`);
+  console.log(
+    `[Verifier] ${testSummary} | route: ${browserRoute} | provider=${activeRoute.provider} browserSeconds=${browserSeconds}\n`
+  );
 
   return {
     merchant,
@@ -622,6 +756,8 @@ export async function verifyCodes(request: VerificationRequest): Promise<Verific
     stageCounts,
     testSummary,
     browserRoute,
+    browserProvider: activeRoute.provider,
+    browserSeconds,
   };
 }
 
@@ -671,5 +807,10 @@ export async function verifySingleCodePublic(
     source: 'API',
     discoveredAt: new Date().toISOString(),
   };
-  return verifySingleCode(merchant, candidate, region);
+  try {
+    return await verifySingleCode(merchant, candidate, region);
+  } finally {
+    // Direct API path has no route loop — still end metered Kernel/Cloudflare sessions
+    await releaseHostedBrowser().catch(() => {});
+  }
 }
