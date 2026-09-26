@@ -94,6 +94,17 @@ function buildBrowserlessWsEndpoint(effective: EffectiveProxy): string {
 
   baseUrl.searchParams.set('token', token);
 
+  // Session length: Browserless closes the browser at its default timeout, which can
+  // be shorter than bootstrap + checkout + N codes. Ask for the plan maximum
+  // (free/starter = 120s; raise BROWSERLESS_SESSION_TIMEOUT_MS on bigger plans —
+  // values above the plan limit are rejected with HTTP 400).
+  if (!baseUrl.searchParams.has('timeout')) {
+    const sessionMs = Number(process.env.BROWSERLESS_SESSION_TIMEOUT_MS || 120_000);
+    if (Number.isFinite(sessionMs) && sessionMs > 0) {
+      baseUrl.searchParams.set('timeout', String(Math.floor(sessionMs)));
+    }
+  }
+
   if (effective.source !== 'none' && effective.server) {
     if (effective.username && effective.password) {
       // Recommended Browserless third-party proxy param (HTTP(S) with auth).
@@ -117,7 +128,13 @@ function buildBrowserlessWsEndpoint(effective: EffectiveProxy): string {
       );
     }
   } else {
-    console.log('[BrowserBot] Browserless connect (no geo/env proxy — datacenter exit IP)');
+    const builtin = baseUrl.searchParams.get('proxy');
+    console.log(
+      builtin
+        ? `[BrowserBot] Browserless connect via built-in ${builtin} proxy` +
+            ` (country=${baseUrl.searchParams.get('proxyCountry') || 'any'})`
+        : '[BrowserBot] Browserless connect (no geo/env proxy — datacenter exit IP)'
+    );
   }
 
   return baseUrl.toString();
@@ -322,21 +339,28 @@ function originOf(merchantUrl: string): string {
 // ---------------------------------------------------------------------------
 
 async function preparePage(page: Page, proxy?: ProxyConfig): Promise<void> {
+  // Stealth: keep UA, platform and client hints consistent with the REAL browser.
+  // A hard-coded Chrome/131 Windows UA on a newer Linux Chrome is itself a bot
+  // signal (UA vs sec-ch-ua vs navigator.platform mismatch), so derive it from
+  // the connected browser and only strip the "Headless" marker.
+  let realUa = '';
+  try {
+    realUa = (await page.browser().userAgent()).replace(/HeadlessChrome/g, 'Chrome');
+  } catch {
+    /* fall back below */
+  }
   const ua =
     process.env.BROWSER_USER_AGENT ||
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+    (/Chrome\/\d+/.test(realUa)
+      ? realUa
+      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
+  const uaPlatform = /Windows/i.test(ua) ? 'Win32' : /Mac OS X/i.test(ua) ? 'MacIntel' : 'Linux x86_64';
 
   await page.setUserAgent(ua);
+  // Only Accept-Language — Chrome sets Accept/Encoding/sec-ch-ua itself and
+  // hand-written client hints that disagree with the binary are detectable.
   await page.setExtraHTTPHeaders({
     'Accept-Language': 'en-US,en;q=0.9',
-    Accept:
-      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Upgrade-Insecure-Requests': '1',
-    'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-    'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
-    DNT: '1',
   });
 
   await page.setViewport({
@@ -358,11 +382,15 @@ async function preparePage(page: Page, proxy?: ProxyConfig): Promise<void> {
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => [1, 2, 3, 4, 5],
-    });
+    // Only patch what is actually missing — overwriting a real PluginArray or
+    // window.chrome with fakes is easier to fingerprint than leaving them alone.
+    if (!navigator.plugins || navigator.plugins.length === 0) {
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5],
+      });
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).chrome = { runtime: {} };
+    if (!(window as any).chrome) (window as any).chrome = { runtime: {} };
     const originalQuery = window.navigator.permissions?.query?.bind(
       window.navigator.permissions
     );
@@ -380,7 +408,7 @@ async function preparePage(page: Page, proxy?: ProxyConfig): Promise<void> {
     await client.send('Network.setUserAgentOverride', {
       userAgent: ua,
       acceptLanguage: 'en-US,en;q=0.9',
-      platform: 'Win32',
+      platform: uaPlatform,
     });
     await client.send('Emulation.setLocaleOverride', { locale: 'en-US' }).catch(() => {});
   } catch {
@@ -629,45 +657,314 @@ async function openFirstProductFromListing(page: Page): Promise<boolean> {
   return false;
 }
 
-async function bootstrapNike(page: Page, origin: string, navTimeout: number): Promise<void> {
-  // Cheap/in-stock entry: men's sale / lifestyle — avoid empty cart
-  const startUrls = [
-    `${origin}/w/sale`,
-    `${origin}/w`,
-    `${origin}/`,
+// ---------------------------------------------------------------------------
+// Nike — real in-stock item → bag (size grid, modals, cart-API confirmation)
+// ---------------------------------------------------------------------------
+
+/** Watches the store's cart API so "Add to Bag" is confirmed (or a 403 block is named). */
+interface CartApiWatch {
+  writes: Array<{ at: number; status: number; method: string; kasada: boolean }>;
+  /** Most recent write at/after `since` (ms epoch), if any. */
+  lastWriteSince(since: number): { status: number; kasada: boolean } | undefined;
+  dispose(): void;
+}
+
+const cartWatches = new WeakMap<Page, CartApiWatch>();
+
+function watchCartApi(page: Page, urlPattern: RegExp): CartApiWatch {
+  const existing = cartWatches.get(page);
+  if (existing) return existing;
+  const writes: CartApiWatch['writes'] = [];
+  const onResponse = (res: import('puppeteer').HTTPResponse) => {
+    try {
+      const method = res.request().method();
+      if (method === 'GET' || method === 'OPTIONS' || method === 'HEAD') return;
+      if (!urlPattern.test(res.url())) return;
+      const headers = res.headers();
+      // Kasada (Nike's bot manager) stamps x-kpsdk-* on protected API responses
+      const kasada = Object.keys(headers).some(h => h.startsWith('x-kpsdk'));
+      writes.push({ at: Date.now(), status: res.status(), method, kasada });
+      if (writes.length > 50) writes.shift();
+    } catch {
+      /* ignore */
+    }
+  };
+  page.on('response', onResponse);
+  const watch: CartApiWatch = {
+    writes,
+    lastWriteSince(since: number) {
+      for (let i = writes.length - 1; i >= 0; i--) {
+        if (writes[i].at >= since) return { status: writes[i].status, kasada: writes[i].kasada };
+      }
+      return undefined;
+    },
+    dispose() {
+      page.off('response', onResponse);
+      cartWatches.delete(page);
+    },
+  };
+  cartWatches.set(page, watch);
+  return watch;
+}
+
+const NIKE_CART_API = /api\.nike\.com\/buy\/carts\//i;
+
+/** Human-ish click: scroll into view, move the mouse over it in steps, click. */
+async function humanClick(page: Page, el: ElementHandle<Element>): Promise<void> {
+  await el.evaluate(node => (node as HTMLElement).scrollIntoView({ block: 'center' })).catch(() => {});
+  await wait(350, 800);
+  const box = await el.boundingBox().catch(() => null);
+  if (box && box.width > 0 && box.height > 0) {
+    const x = box.x + box.width * (0.35 + Math.random() * 0.3);
+    const y = box.y + box.height * (0.35 + Math.random() * 0.3);
+    await page.mouse.move(x, y, { steps: 10 + Math.floor(Math.random() * 12) });
+    await wait(120, 350);
+    await page.mouse.click(x, y, { delay: 40 + Math.floor(Math.random() * 80) });
+  } else {
+    await el.click();
+  }
+}
+
+/** Nike locale prefix from the merchant URL (nike.com/gb/... → /gb), else ''. */
+function nikeBase(merchantUrl: string): string {
+  const origin = originOf(merchantUrl);
+  try {
+    const m = new URL(merchantUrl).pathname.match(/^\/([a-z]{2})(\/|$)/i);
+    if (m && !['t', 'w'].includes(m[1].toLowerCase())) return `${origin}/${m[1].toLowerCase()}`;
+  } catch {
+    /* ignore */
+  }
+  return origin;
+}
+
+/** Cookie banner, "choose your location" geo modal, promo pop-ups. Best-effort. */
+async function dismissNikeModals(page: Page): Promise<void> {
+  try {
+    const clicked = await page.evaluate(() => {
+      let n = 0;
+      const buttons = Array.from(document.querySelectorAll('button, a[role="button"]')) as HTMLElement[];
+      const accept = ['accept all', 'accept all cookies', 'accept cookies', 'allow all'];
+      const stay = ['stay on', 'continue to nike', 'continue shopping here', 'no thanks', 'not now'];
+      for (const b of buttons) {
+        const t = (b.textContent || '').toLowerCase().replace(/\s+/g, ' ').trim();
+        if (!t || t.length > 40) continue;
+        if (accept.some(p => t === p || t.startsWith(p)) || stay.some(p => t.startsWith(p))) {
+          b.click();
+          n++;
+        }
+      }
+      // Close (×) buttons inside open dialogs only — never page-level controls
+      const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'));
+      for (const d of dialogs) {
+        const close = d.querySelector(
+          'button[aria-label*="close" i], button[data-testid*="close" i], button[class*="close" i]'
+        ) as HTMLElement | null;
+        if (close) {
+          close.click();
+          n++;
+        }
+      }
+      return n;
+    });
+    if (clicked) await wait(500, 1000);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Header bag count ("Bag Items: N"), or null if the badge is not on the page. */
+async function readNikeBagCount(page: Page): Promise<number | null> {
+  try {
+    return await page.evaluate(() => {
+      const els = Array.from(
+        document.querySelectorAll('[aria-label^="Bag Items" i], [data-testid*="cart-count" i], [data-testid="qa-cart-count"]')
+      );
+      let best: number | null = null;
+      for (const el of els) {
+        const src = `${el.getAttribute('aria-label') || ''} ${el.textContent || ''}`;
+        const m = src.match(/(\d+)/);
+        if (m) best = Math.max(best ?? 0, Number(m[1]));
+      }
+      return best;
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Nike PDP size grid: input[name="grid-selector-input"] + <label for>.
+ * Skips disabled / out-of-stock sizes; prefers mid sizes (M/L, 9–10).
+ * Returns 'selected' | 'one-size' (no grid) | 'none-available'.
+ */
+async function selectNikeSize(page: Page): Promise<'selected' | 'one-size' | 'none-available'> {
+  const pickId = await page.evaluate(() => {
+    const inputs = Array.from(
+      document.querySelectorAll('input[name="grid-selector-input"], [data-testid="pdp-grid-selector-item"] input')
+    ) as HTMLInputElement[];
+    if (inputs.length === 0) return '__one_size__';
+    const available = inputs.filter(i => {
+      if (i.disabled || i.getAttribute('aria-disabled') === 'true') return false;
+      const label = i.id ? document.querySelector(`label[for="${CSS.escape(i.id)}"]`) : null;
+      const cls = `${i.className} ${label?.className || ''} ${i.closest('[data-testid="pdp-grid-selector-item"]')?.className || ''}`;
+      return !/disabled|unavailable|out-?of-?stock|sold-?out/i.test(cls);
+    });
+    if (available.length === 0) return '__none__';
+    const preferred = ['M', 'L', '10', '9.5', '9', 'M 9 / W 10.5', 'S', 'XL'];
+    const byPref = preferred
+      .map(v => available.find(i => i.value.toUpperCase() === v.toUpperCase()))
+      .find(Boolean);
+    const pick = byPref || available[Math.floor(available.length / 2)];
+    return pick.id || '__noid__';
+  });
+  if (pickId === '__one_size__') return 'one-size';
+  if (pickId === '__none__' || pickId === '__noid__') return 'none-available';
+
+  const label = await page.$(`label[for="${pickId.replace(/"/g, '\\"')}"]`);
+  if (!label) return 'none-available';
+  await humanClick(page, label);
+  await wait(500, 1000);
+  const checked = await page
+    .evaluate(id => (document.getElementById(id) as HTMLInputElement | null)?.checked === true, pickId)
+    .catch(() => false);
+  return checked ? 'selected' : 'none-available';
+}
+
+/** Cheap, usually in-stock PLPs first (socks / accessories), then search + sale. */
+function nikeListingUrls(base: string): string[] {
+  return [
+    `${base}/w/socks-7ny3q`,
+    `${base}/w?q=socks&vst=socks`,
+    `${base}/w/accessories-equipment-awwpw`,
+    `${base}/w/sale-3yaep`,
   ];
-  let loaded = false;
-  for (const url of startUrls) {
+}
+
+/** Product URLs from a Nike PLP (product-card overlays; gift cards excluded). */
+async function collectNikeProductUrls(page: Page, max: number): Promise<string[]> {
+  try {
+    return await page.evaluate(limit => {
+      const out: string[] = [];
+      const anchors = Array.from(
+        document.querySelectorAll('a[data-testid="product-card__link-overlay"], a.product-card__link-overlay, a[href*="/t/"]')
+      ) as HTMLAnchorElement[];
+      for (const a of anchors) {
+        const href = a.href;
+        if (!href || !/\/t\//.test(href) || /gift-?card|GIFTCARD/i.test(href)) continue;
+        if (!out.includes(href)) out.push(href);
+        if (out.length >= limit) break;
+      }
+      return out;
+    }, max);
+  } catch {
+    return [];
+  }
+}
+
+async function bootstrapNike(page: Page, merchantUrl: string, navTimeout: number): Promise<void> {
+  const base = nikeBase(merchantUrl);
+  const watch = watchCartApi(page, NIKE_CART_API);
+
+  // 1. Cheap in-stock listing (socks first) → candidate product URLs
+  let productUrls: string[] = [];
+  for (const url of nikeListingUrls(base)) {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeout });
-      await wait(1500, 2500);
+      await wait(1800, 3000);
       const blocked = await detectBotBlock(page);
-      if (blocked) {
-        throw new Error(categorized('bot_blocked', blocked));
-      }
-      loaded = true;
-      break;
+      if (blocked) throw new Error(categorized('bot_blocked', blocked));
+      await dismissNikeModals(page);
+      await humanMouseJitter(page);
+      await page.evaluate(() => window.scrollBy(0, 250 + Math.floor(Math.random() * 300))).catch(() => {});
+      await wait(700, 1400);
+      productUrls = await collectNikeProductUrls(page, 4);
+      console.log(`  → Nike PLP ${new URL(url).pathname}: ${productUrls.length} product(s)`);
+      if (productUrls.length) break;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('[bot_blocked]')) throw err;
       continue;
     }
   }
-  if (!loaded) {
-    throw new Error(categorized('cart_bootstrap_failed', 'Nike PLP failed to load'));
+  if (productUrls.length === 0) {
+    throw new Error(categorized('cart_bootstrap_failed', 'Nike: no product found on socks/accessories/sale listings'));
   }
 
-  // Dismiss cookie / locale banners if present
-  await clickByText(page, ['accept all', 'accept cookies', 'agree', 'got it']).catch(() => {});
-  await wait(400, 800);
+  // 2. Try up to 3 products: available size → Add to Bag → confirm bag count / cart API
+  const reasons: string[] = [];
+  for (const productUrl of productUrls.slice(0, 3)) {
+    const slug = productUrl.split('/t/')[1]?.split('/')[0] || productUrl;
+    try {
+      await page.goto(productUrl, { waitUntil: 'domcontentloaded', timeout: navTimeout });
+      await wait(2500, 4000);
+      const blocked = await detectBotBlock(page);
+      if (blocked) throw new Error(categorized('bot_blocked', blocked));
+      await dismissNikeModals(page);
+      await humanMouseJitter(page);
 
-  if (!(await openFirstProductFromListing(page))) {
-    throw new Error(categorized('cart_bootstrap_failed', 'Nike: no product link found on PLP'));
+      const before = (await readNikeBagCount(page)) ?? 0;
+      const size = await selectNikeSize(page);
+      console.log(`  → Nike PDP ${slug}: size ${size}`);
+      if (size === 'none-available') {
+        reasons.push(`${slug}: no in-stock size`);
+        continue;
+      }
+
+      const atb =
+        (await page.$('button[data-testid="atb-button"]')) ||
+        (await page.$('button[aria-label="Add to Bag" i]')) ||
+        (await page.$('button[data-testid*="add-to-cart" i]'));
+      if (!atb) {
+        reasons.push(`${slug}: no Add to Bag button`);
+        continue;
+      }
+      const disabled = await atb.evaluate(b => (b as HTMLButtonElement).disabled).catch(() => false);
+      if (disabled) {
+        reasons.push(`${slug}: Add to Bag disabled`);
+        continue;
+      }
+
+      const clickedAt = Date.now();
+      await humanClick(page, atb);
+
+      // Wait for the bag badge to increment or the cart API to answer
+      let after = before;
+      let write: { status: number; kasada: boolean } | undefined;
+      for (let i = 0; i < 16; i++) {
+        await wait(500);
+        after = (await readNikeBagCount(page)) ?? after;
+        write = watch.lastWriteSince(clickedAt);
+        if (after > before) break;
+        if (write && write.status >= 400 && i >= 4) break;
+      }
+
+      if (after > before) {
+        console.log(`  → Nike: added ${slug} (size ${size}); bag count ${before} → ${after}`);
+        await dismissNikeModals(page);
+        return;
+      }
+      if (write && (write.status === 403 || write.status === 429)) {
+        throw new Error(
+          categorized(
+            'bot_blocked',
+            `Nike cart API rejected Add to Bag (HTTP ${write.status}` +
+              `${write.kasada ? ', Kasada bot protection' : ''}) — store blocks automated carts from this browser/IP`
+          )
+        );
+      }
+      reasons.push(
+        `${slug}: Add to Bag had no effect${write ? ` (cart API HTTP ${write.status})` : ' (no cart API call)'}`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('[bot_blocked]')) throw err;
+      reasons.push(`${slug}: ${msg.slice(0, 120)}`);
+    }
   }
 
-  if (!(await addToBag(page))) {
-    throw new Error(categorized('cart_bootstrap_failed', 'Nike: Add to Bag failed (size/stock?)'));
-  }
+  throw new Error(
+    categorized('cart_bootstrap_failed', `Nike: could not add an in-stock item — ${reasons.join('; ')}`)
+  );
 }
 
 async function bootstrapAdidas(page: Page, origin: string, navTimeout: number): Promise<void> {
@@ -766,7 +1063,7 @@ async function bootstrapCart(
   console.log(`  → bootstrapCart (${merchant}): ${origin}`);
 
   if (merchant === 'nike') {
-    await bootstrapNike(page, origin, navTimeout);
+    await bootstrapNike(page, merchantUrl, navTimeout);
   } else if (merchant === 'adidas') {
     await bootstrapAdidas(page, origin, navTimeout);
   } else {
@@ -818,6 +1115,27 @@ async function navigateTowardCheckout(
   navTimeout: number
 ): Promise<void> {
   const origin = originOf(merchantUrl);
+
+  if (detectMerchant(merchantUrl) === 'nike') {
+    // Nike's promo field ("Do you have a Promo Code?") is on the bag page, before
+    // sign-in / guest checkout and long before any payment step — apply it there.
+    await page.goto(`${nikeBase(merchantUrl)}/cart`, { waitUntil: 'domcontentloaded', timeout: navTimeout });
+    await wait(2500, 4000);
+    const nikeBlocked = await detectBotBlock(page);
+    if (nikeBlocked) throw new Error(categorized('bot_blocked', nikeBlocked));
+    await dismissNikeModals(page);
+    const count = await readNikeBagCount(page);
+    if (count === 0) {
+      throw new Error(categorized('cart_bootstrap_failed', 'Nike: bag is empty on /cart after Add to Bag'));
+    }
+    await clickByText(page, ['do you have a promo code', 'promo code'], 'button, summary, div[role="button"]').catch(
+      () => false
+    );
+    await wait(600, 1200);
+    console.log(`  → Nike bag page (items: ${count ?? '?'}) — promo field is on this page`);
+    return;
+  }
+
   const bagUrls = [
     `${origin}/cart`,
     `${origin}/bag`,
@@ -1206,9 +1524,25 @@ async function applyCodeOnPage(
   }
   await wait(400, 800);
 
+  const applyAt = Date.now();
   const applied = await clickApplyButton(page);
   if (applied) {
     await wait(2500, 4000);
+  }
+
+  // If the store's cart API refused the promo request itself (bot manager 403/429),
+  // the code was never judged by the store — do not report it as rejected.
+  const cartWrite = cartWatches.get(page)?.lastWriteSince(applyAt);
+  if (cartWrite && (cartWrite.status === 403 || cartWrite.status === 429)) {
+    return {
+      success: false,
+      errorMessage: categorized(
+        'bot_blocked',
+        `Store API refused the promo request (HTTP ${cartWrite.status}` +
+          `${cartWrite.kasada ? ', Kasada bot protection' : ''}) — code not evaluated`
+      ),
+      pageLoadTime: Date.now() - start,
+    };
   }
 
   const errorMessage = await extractErrorSignal(page);

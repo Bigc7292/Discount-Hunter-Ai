@@ -96,10 +96,17 @@ function pushMemory(entry: CheckoutLedgerEntry): void {
   }
 }
 
-async function initFirestore(): Promise<FirestoreLike | null> {
-  if (firestoreReady === false) return null;
-  if (firestoreDb) return firestoreDb;
+let firestoreInit: Promise<FirestoreLike | null> | null = null;
 
+/** Single-flight: concurrent ledger writes share one init attempt. */
+function initFirestore(): Promise<FirestoreLike | null> {
+  if (firestoreReady === false) return Promise.resolve(null);
+  if (firestoreDb) return Promise.resolve(firestoreDb);
+  if (!firestoreInit) firestoreInit = initFirestoreOnce();
+  return firestoreInit;
+}
+
+async function initFirestoreOnce(): Promise<FirestoreLike | null> {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!raw || !raw.trim()) {
     firestoreReady = false;
@@ -107,7 +114,11 @@ async function initFirestore(): Promise<FirestoreLike | null> {
   }
 
   try {
-    const admin = await import('firebase-admin');
+    // firebase-admin is CommonJS: under NodeNext ESM the namespace only exposes
+    // `default` (namespace.apps is undefined → "reading 'length'" crash). Use default.
+    const mod = await import('firebase-admin');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const admin = ((mod as any).default ?? mod) as typeof import('firebase-admin');
     const creds = JSON.parse(raw) as Record<string, unknown>;
     if (!admin.apps.length) {
       admin.initializeApp({
