@@ -20,6 +20,12 @@ import admin from 'firebase-admin';
 import { verifyCodes } from './verifier.js';
 import { getAllSupportedRegions, getGeoLocation, isGeoProxyConfigured } from './geoProxy.js';
 import { cleanup, isBrowserlessConfigured } from './browserBot.js';
+import {
+  getConfiguredProviders,
+  getProviderOrder,
+  isCloudflareBrowserConfigured,
+  isKernelConfigured,
+} from './browserProviders.js';
 import { discoverCodes } from './discovery.js';
 import { runVerificationTests } from './testRunner.js';
 import { createProfileAccount } from './profileManager.js';
@@ -219,6 +225,9 @@ app.get('/health', (_req, res) => {
     stripe: !!stripe,
     firebaseAdmin: !!firestore,
     browserlessConfigured: isBrowserlessConfigured(),
+    kernelConfigured: isKernelConfigured(),
+    cloudflareBrowserConfigured: isCloudflareBrowserConfigured(),
+    browserProviderOrder: getProviderOrder(),
     geoProxyConfigured: isGeoProxyConfigured(),
     envProxyOverride: envProxy,
   });
@@ -452,7 +461,7 @@ async function shutdown() {
 process.on('SIGINT',  shutdown);
 process.on('SIGTERM', shutdown);
 
-// ── Start ───────────────────────────────────────────────────────────────────
+// ── Start ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Discount Hunter Verifier v2.0.0`);
@@ -466,7 +475,10 @@ app.listen(PORT, () => {
   const browserlessOn = isBrowserlessConfigured();
   const geoOn = isGeoProxyConfigured();
   const envProxy = !!(process.env.PROXY_SERVER || process.env.RESIDENTIAL_PROXY_URL);
-  console.log(`   Browserless: ${browserlessOn ? 'CONFIGURED (hosted Chrome primary)' : 'NOT SET (local Chromium fallback)'}`);
+  console.log(`   Browsers: order=${getProviderOrder().join(',')} active=${getConfiguredProviders().join(',')}`);
+  console.log(`   Kernel:  ${isKernelConfigured() ? 'CONFIGURED (stealth cloud browser)' : 'NOT SET (skipped)'}`);
+  console.log(`   Cloudflare Browser Run: ${isCloudflareBrowserConfigured() ? 'CONFIGURED' : 'NOT SET (skipped)'}`);
+  console.log(`   Browserless: ${browserlessOn ? 'CONFIGURED (hosted Chrome)' : 'NOT SET (skipped)'}`);
   if (browserlessOn) {
     const ws = process.env.BROWSERLESS_WS_ENDPOINT?.trim() || 'wss://production-sfo.browserless.io';
     console.log(`   BrowserlessWS: ${ws}`);
