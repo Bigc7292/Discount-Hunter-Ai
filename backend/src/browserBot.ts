@@ -1004,6 +1004,9 @@ async function bootstrapAdidas(page: Page, origin: string, navTimeout: number): 
   }
 }
 
+/** Pages whose cart was filled via the Shopify storefront API (go straight to /checkout). */
+const shopifyPages = new WeakSet<Page>();
+
 /** Shopify storefront: GET /products.json, POST /cart/add.js with the first available variant. */
 async function addViaShopifyAjax(page: Page): Promise<boolean> {
   try {
@@ -1026,6 +1029,7 @@ async function addViaShopifyAjax(page: Page): Promise<boolean> {
     });
     if (added) {
       console.log('  → Shopify cart API: item added');
+      shopifyPages.add(page);
       await wait(500, 1000);
     }
     return added;
@@ -1170,6 +1174,16 @@ async function navigateTowardCheckout(
     return;
   }
 
+  if (shopifyPages.has(page)) {
+    // Shopify: the discount field lives on /checkout (stop before payment; never submit).
+    await page.goto(`${origin}/checkout`, { waitUntil: 'domcontentloaded', timeout: navTimeout });
+    await page.waitForNetworkIdle({ idleTime: 800, timeout: 10000 }).catch(() => {});
+    const shopBlocked = await detectBotBlock(page);
+    if (shopBlocked) throw new Error(categorized('bot_blocked', shopBlocked));
+    console.log(`  → Shopify checkout: ${page.url().split('?')[0]}`);
+    return;
+  }
+
   const bagUrls = [
     `${origin}/cart`,
     `${origin}/bag`,
@@ -1213,6 +1227,8 @@ async function navigateTowardCheckout(
     ])) || (await clickByText(page, ['checkout', 'check out', 'proceed to checkout']));
 
   if (checkoutClicked) {
+    // Let the click's navigation settle so later evaluate() calls don't hit a destroyed context
+    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 }).catch(() => {});
     await wait(1500, 2500);
     await preferGuestCheckout(page);
   }
@@ -1257,6 +1273,7 @@ async function abandonCart(page: Page, merchantUrl: string): Promise<void> {
 
 async function findPromoInput(page: Page): Promise<ElementHandle<Element> | null> {
   const selectors = [
+    'input[name="reductions"]', // Shopify checkout
     'input[name*="promo" i]',
     'input[name*="coupon" i]',
     'input[name*="discount" i]',
