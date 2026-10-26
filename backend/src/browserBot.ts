@@ -630,6 +630,7 @@ async function openFirstProductFromListing(page: Page): Promise<boolean> {
     'a[data-testid*="product" i]',
     'a[href*="/t/"]', // Nike PDP pattern
     'a[href*="/product/"]',
+    'a[href*="/products/"]', // Shopify PDP pattern
     'a[href*="/dp/"]',
     '[data-testid*="product-card" i] a',
     '.product-card a',
@@ -1003,6 +1004,36 @@ async function bootstrapAdidas(page: Page, origin: string, navTimeout: number): 
   }
 }
 
+/** Shopify storefront: GET /products.json, POST /cart/add.js with the first available variant. */
+async function addViaShopifyAjax(page: Page): Promise<boolean> {
+  try {
+    const added = await page.evaluate(async () => {
+      const res = await fetch('/products.json?limit=30', { credentials: 'same-origin' });
+      if (!res.ok || !(res.headers.get('content-type') || '').includes('json')) return false;
+      const data = (await res.json()) as { products?: Array<{ variants?: Array<{ id: number; available?: boolean }> }> };
+      for (const product of data.products || []) {
+        const variant = (product.variants || []).find(v => v.available);
+        if (!variant) continue;
+        const add = await fetch('/cart/add.js', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ items: [{ id: variant.id, quantity: 1 }] }),
+        });
+        if (add.ok) return true;
+      }
+      return false;
+    });
+    if (added) {
+      console.log('  → Shopify cart API: item added');
+      await wait(500, 1000);
+    }
+    return added;
+  } catch {
+    return false;
+  }
+}
+
 async function bootstrapGeneric(page: Page, merchantUrl: string, navTimeout: number): Promise<void> {
   const origin = originOf(merchantUrl);
   const startUrls = [
@@ -1033,6 +1064,9 @@ async function bootstrapGeneric(page: Page, merchantUrl: string, navTimeout: num
   }
 
   await clickByText(page, ['accept all', 'accept cookies', 'agree', 'got it']).catch(() => {});
+
+  // Shopify stores: add an in-stock variant via the public storefront cart API (same-origin, real cart)
+  if (await addViaShopifyAjax(page)) return;
 
   // If already on a PDP with add-to-cart, use it; else open a product
   const hasAdd = await page.$(
